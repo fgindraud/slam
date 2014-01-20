@@ -6,6 +6,19 @@ Daemon to manage multi monitors
 import sys, os, select
 import xcb, xcb.xproto, xcb.randr
 
+def set_to_text (values, highlight = None, str_f = str):
+    text_parts = []
+    if highlight: text_parts = ["[%s]" % str_f (val) if highlight (val) else str_f (val) for val in values]
+    else: text_parts = [str_f (val) for val in values]
+    return ' '.join (text_parts)
+
+def class_attr (className, showAttr, highlight = None):
+    keep_attr = lambda a: not callable (a) and not a.startswith ('__') and showAttr (getattr (className, a))
+    attrs = [attr for attr in dir (className) if keep_attr (attr)]
+    
+    if highlight: return set_to_text (attrs, lambda a: highlight (getattr (className, a)))
+    else: return set_to_text (attrs)
+
 # Xcb
 class XRandr:
     def __init__ (self, display=None):
@@ -46,7 +59,7 @@ class XRandr:
         return True
 
     def check_randr_version (self):
-        expected = 1, 2
+        expected = 1, 3
         version_reply = self.randr.QueryVersion (*expected).reply ()
         version = version_reply.major_version, version_reply.minor_version
         if (not version >= expected):
@@ -64,34 +77,60 @@ class XRandr:
         print ('ev:OutputProperty')
 
     def screen_info (self):
-        # Screen
-        sizes_pix = self.screen.width_in_pixels, self.screen.height_in_pixels
-        sizes_phy = self.screen.width_in_millimeters, self.screen.height_in_millimeters
-        print ("Screen {2}: {0[0]}x{0[1]}, {1[0]}mm x {1[1]}mm".format (sizes_pix, sizes_phy, 0))
+        while True:
+            # Request info
+            res = self.randr.GetScreenResourcesCurrent (self.root_window).reply ()
+            crtc_req = {}
+            for crtc in res.crtcs:
+                crtc_req[crtc] = self.randr.GetCrtcInfo (crtc, res.config_timestamp)
+            output_req = {}
+            for output in res.outputs:
+                output_req[output] = self.randr.GetOutputInfo (output, res.config_timestamp)
 
-        res = self.randr.GetScreenResources (self.root_window).reply ()
-        
-        # Crtc
-        crtc_req = {}
-        for crtc in res.crtcs:
-            crtc_req[crtc] = self.randr.GetCrtcInfo (crtc, res.config_timestamp)
-        for crtc in res.crtcs:
-            info = crtc_req[crtc].reply ()
-            print ("\tCRTC %d" % crtc)
-            print ("\t\t%dx%d+%d+%d" % (info.width, info.height, info.x, info.y))
-            text = ""
-            for output in info.possible:
-                if output in info.outputs:
-                    text += "[%d] " % output
-                else:
-                    text += "%d " % output
-            print ("\t\tOutputs: %s" % text)
+            # Screen
+            sizes_pix = self.screen.width_in_pixels, self.screen.height_in_pixels
+            sizes_phy = self.screen.width_in_millimeters, self.screen.height_in_millimeters
+            print ("Screen {2}: {0[0]}x{0[1]}, {1[0]}mm x {1[1]}mm".format (sizes_pix, sizes_phy, 0))
 
-        # Outputs
+            # Modes
+            for mode in res.modes:
+                mode_flags = "" #class_attr (xcb.randr.ModeFlag, lambda a: True)
+                freq = mode.dot_clock / (mode.htotal * mode.vtotal)
+                formatting = "\tMode %d  \t%dx%d  \t%f\t%s"
+                args = mode.id, mode.width, mode.height, freq, mode_flags
+                print (formatting % args)
+     
+            # Crtc
+            for crtc in res.crtcs:
+                info = crtc_req[crtc].reply ()
+                if info.status != xcb.randr.SetConfig.Success: continue
+                print ("\tCRTC %d" % crtc)
+                print ("\t\t%dx%d+%d+%d" % (info.width, info.height, info.x, info.y))
+                print ("\t\tOutput[active]: %s" % set_to_text (info.possible, lambda o: o in info.outputs))
+                has_rot = lambda r: r & info.rotations
+                current_rot = lambda r: r == info.rotation
+                print ("\t\tRotations[current]: %s" % class_attr (xcb.randr.Rotation, has_rot, current_rot))
+                print ("\t\tMode: %d" % info.mode)
+
+            # Outputs
+            for output in res.outputs:
+                info = output_req[output].reply ()
+                if info.status != xcb.randr.SetConfig.Success: continue
+                name = str (bytearray (info.name))
+                conn_status = class_attr (xcb.randr.Connection, lambda c: c == info.connection)
+                print ("\tOutput %d %s (%s)" % (output, name, conn_status))
+                if info.connection == xcb.randr.Connection.Connected:
+                    print ("\t\tPhy size: %dmm x %dmm" % (info.mm_width, info.mm_height))
+                    print ("\t\tCrtcs[active]: %s" % set_to_text (info.crtcs, lambda c: c == info.crtc))
+                    print ("\t\tClones: %s" % set_to_text (info.clones))
+                    str_f = lambda i: str (info.modes[i])
+                    is_preferred = lambda i : i < info.num_preferred
+                    print ("\t\tModes[pref]: %s" % set_to_text (range (len (info.modes)), is_preferred, str_f))
+            break
 
 
     def move_down (self):
-        res = self.randr.GetScreenResources (self.root_window).reply ()
+        res = self.randr.GetScreenResourcesCurrent (self.root_window).reply ()
         
         # Change crtc
         data = self.randr.GetCrtcInfo (64, res.config_timestamp).reply ()
