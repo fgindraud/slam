@@ -8,7 +8,7 @@ import xcb, xcb.xproto, xcb.randr
 
 # Xcb
 class XRandr:
-    def __init__ (self, display=''):
+    def __init__ (self, display=None):
         # Connection
         self.conn = xcb.connect (display=display)
         
@@ -43,6 +43,7 @@ class XRandr:
                 else: raise Exception ('Unexpected xcb.randr.NotifyEvent subcode %d' % ev.subCode)
             else: raise Exception ('Unexpected X message')
             ev = self.conn.poll_for_event ()
+        return True
 
     def check_randr_version (self):
         expected = 1, 2
@@ -53,32 +54,89 @@ class XRandr:
             raise Exception (text)
 
     def event_screen_change (self, ev): # screen-wide configuration change (includes ctrc & output_change)
-        print ('ScreenChange')
+        print ('ev:ScreenChange')
+        self.screen = self.conn.get_setup ().roots[0]
     def event_crtc_change (self, ev): # TODO
-        print ('CrtcChange')
+        print ('ev:CrtcChange')
     def event_output_change (self, ev): # output remove, add, or conf change
-        print ('OutputChange')
+        print ('ev:OutputChange')
     def event_output_property (self, ev): # output local property change
-        print ('OutputProperty')
+        print ('ev:OutputProperty')
+
+    def screen_info (self):
+        # Screen
+        sizes_pix = self.screen.width_in_pixels, self.screen.height_in_pixels
+        sizes_phy = self.screen.width_in_millimeters, self.screen.height_in_millimeters
+        print ("Screen {2}: {0[0]}x{0[1]}, {1[0]}mm x {1[1]}mm".format (sizes_pix, sizes_phy, 0))
+
+        res = self.randr.GetScreenResources (self.root_window).reply ()
+        
+        # Crtc
+        crtc_req = {}
+        for crtc in res.crtcs:
+            crtc_req[crtc] = self.randr.GetCrtcInfo (crtc, res.config_timestamp)
+        for crtc in res.crtcs:
+            info = crtc_req[crtc].reply ()
+            print ("\tCRTC %d" % crtc)
+            print ("\t\t%dx%d+%d+%d" % (info.width, info.height, info.x, info.y))
+            text = ""
+            for output in info.possible:
+                if output in info.outputs:
+                    text += "[%d] " % output
+                else:
+                    text += "%d " % output
+            print ("\t\tOutputs: %s" % text)
+
+        # Outputs
+
+
+    def move_down (self):
+        res = self.randr.GetScreenResources (self.root_window).reply ()
+        
+        # Change crtc
+        data = self.randr.GetCrtcInfo (64, res.config_timestamp).reply ()
+        print (self.randr.SetCrtcConfig (64, res.timestamp, res.config_timestamp,
+                0, 900, data.mode, data.rotation, data.num_outputs, data.outputs).reply ().status)
+
+        # Change screen size
+        dpi = (25.4 * self.screen.width_in_pixels) / self.screen.width_in_millimeters
+        print ("dpi %f" % dpi)
+        self.randr.SetScreenSize (self.root_window, 1920, 1980, 1920 * 25.4 / dpi, 1980 * 25.4 / dpi)
+        self.conn.flush ()
+
+# Commands
+class StdinCmd:
+    def __init__ (self, randr):
+        self.randr = randr
+    def fileno (self):
+        return sys.stdin.fileno ()
+    def activate (self):
+        line = sys.stdin.readline ()
+        if "info" in line: self.randr.screen_info ()
+        if "test" in line: self.randr.move_down ()
+        if "exit" in line: return False
+        return True
 
 # Main event loop
 def event_loop (object_list):
     """
     Use select to wait for objects representing FD ressources.
     Requires for each object:
-        fileno () method
-        activate () method
+        int fileno () method
+        bool activate () method : returning False stops the loop
     """
-    while True:
+    cont = True
+    while cont:
         activated, _, _ = select.select (object_list, [], [])
         for obj in activated:
-            obj.activate ()
+            cont = obj.activate ()
 
 # Entry point
 if __name__ == "__main__":
     xconn = XRandr ()
+    cmd = StdinCmd (xconn)
     try:
-        event_loop ([xconn])
+        event_loop ([xconn, cmd])
     finally:
         xconn.cleanup ()
     sys.exit (0)
