@@ -53,25 +53,75 @@ class XrandrState:
     * outputs_info: invalidate specific output on OutputChange
     * outputs_properties: TODO
     '''
-    def __init__ (self, initialScreenData):
+    def __init__ (self, initialScreenData, conn):
         self.root = initialScreenData.root
+        self.conn = conn
         # Initial Screen size
         self.screen_size = initialScreenData.width_in_pixels, initialScreenData.height_in_pixels
         self.screen_size_phy = initialScreenData.width_in_millimeters, initialScreenData.height_in_millimeters
-        # Valid flags for data
-    
+        # Empty data
+        self.screen_res = None
+        self.crtcs = dict ()
+        self.outputs = dict ()
+        # Get state
+        self.update_state ()
+
+    def update_state (self):
+        if self.screen_res == None:
+            self.screen_res = self.conn.GetScreenResourcesCurrent (self.root).reply ()
+            print ("New ScreenRes (t=%d, ct=%d)" % (self.screen_res.timestamp, self.screen_res.config_timestamp))
+        for crtc in self.screen_res.crtcs:
+            if crtc not in self.crtcs:
+                self.crtcs[crtc] = self.conn.GetCrtcInfo (crtc, self.screen_res.config_timestamp).reply ()
+                if self.crtcs[crtc].status != xcb.randr.SetConfig.Success: raise Exception ("old config")
+        for output in self.screen_res.outputs:
+            if output not in self.outputs:
+                self.outputs[output] = self.conn.GetOutputInfo (output, self.screen_res.config_timestamp).reply ()
+                if self.outputs[output].status != xcb.randr.SetConfig.Success: raise Exception ("old config")
+        # TODO properties
+
+    def update (self, events):
+        for ev in events:
+            if isinstance (ev, xcb.randr.ScreenChangeNotifyEvent): self.on_screen_change (ev)
+            elif isinstance (ev, xcb.randr.NotifyEvent):
+                if ev.subCode == xcb.randr.Notify.CrtcChange: self.on_crtc_change (ev.u.cc)
+                elif ev.subCode == xcb.randr.Notify.OutputChange: self.on_output_change (ev.u.oc)
+                elif ev.subCode == xcb.randr.Notify.OutputProperty: self.on_output_property (ev.u.op)
+                else: raise Exception ('Unhandled xcb.randr.NotifyEvent subcode %d' % ev.subCode)
+            else: raise Exception ('Unexpected X message')
+        self.update_state ()
+
     def on_screen_change (self, ev):
         # Update screen sizes
         self.screen_size = ev.width, ev.height
         self.screen_size_phy = ev.mwidth, ev.mheight
-        
+        # Invalidate or update screen ressources
+        if self.screen_res != None and self.screen_res.config_timestamp < ev.config_timestamp:
+            self.screen_res = None
+            self.crtcs.clear ()
+            self.outputs.clear ()
+        if self.screen_res != None: self.screen_res.timestamp = ev.timestamp
+        # debug
         print ('ScreenChange (t=%d, ct=%d, size=%dx%d)' % (ev.timestamp, ev.config_timestamp, ev.width, ev.height))
     def on_crtc_change (self, ev):
+        # Invalidate crtc
+        if ev.crtc in self.crtcs: del self.crtcs[ev.crtc]
+        # debug
         print ('CrtcChange (t=%d)' % ev.timestamp)
     def on_output_change (self, ev):
+        # May invalidate screen ressources (add or remove modes)
+        if self.screen_res != None and self.screen_res.config_timestamp < ev.config_timestamp:
+            self.screen_res = None
+            self.crtcs.clear ()
+            self.outputs.clear ()
+        # Invalidate output anyway
+        if ev.output in self.outputs: del self.outputs[ev.output]
+        # debug
         print ('OutputChange (t=%d, ct=%d)' % (ev.timestamp, ev.config_timestamp))
     def on_output_property (self, ev):
+        # TODO
         print ('OutputProperty (t=%d)' % ev.timestamp)
+    
 
 class XRandrClient:
     '''
@@ -92,7 +142,7 @@ class XRandrClient:
             raise Exception (msg_format.format (XRandrClient.randr_version, version))
 
         # Internal state
-        self.state = XrandrState (self.conn.get_setup ().roots[screen])
+        self.state = XrandrState (self.conn.get_setup ().roots[screen], self.randr)
         
         # Randr register for events
         masks = xcb.randr.NotifyMask.ScreenChange | xcb.randr.NotifyMask.CrtcChange
@@ -109,41 +159,22 @@ class XRandrClient:
             if not ev: return
             yield ev
     def activate (self):
-        for ev in self.pending_events ():
-            if isinstance (ev, xcb.randr.ScreenChangeNotifyEvent): self.state.on_screen_change (ev)
-            elif isinstance (ev, xcb.randr.NotifyEvent):
-                if ev.subCode == xcb.randr.Notify.CrtcChange: self.state.on_crtc_change (ev.u.cc)
-                elif ev.subCode == xcb.randr.Notify.OutputChange: self.state.on_output_change (ev.u.oc)
-                elif ev.subCode == xcb.randr.Notify.OutputProperty: self.state.on_output_property (ev.u.op)
-                else: raise Exception ('Unhandled xcb.randr.NotifyEvent subcode %d' % ev.subCode)
-            else: raise Exception ('Unexpected X message')
+        self.state.update (self.pending_events ())
         return True
 
     def screen_info (self):
-        # Request info
-        res = self.randr.GetScreenResourcesCurrent (self.state.root).reply ()
-        crtc_req = {}
-        for crtc in res.crtcs:
-            crtc_req[crtc] = self.randr.GetCrtcInfo (crtc, res.config_timestamp)
-        output_req = {}
-        for output in res.outputs:
-            output_req[output] = self.randr.GetOutputInfo (output, res.config_timestamp)
-
         # Screen
         print ("Screen {2}: {0[0]}x{0[1]}, {1[0]}mm x {1[1]}mm".format (self.state.screen_size, self.state.screen_size_phy, 0))
-
         # Modes
-        for mode in res.modes:
+        for mode in self.state.screen_res.modes:
             mode_flags = "" #class_attr (xcb.randr.ModeFlag, lambda a: True)
             freq = mode.dot_clock / (mode.htotal * mode.vtotal)
             formatting = "\tMode %d  \t%dx%d  \t%f\t%s"
             args = mode.id, mode.width, mode.height, freq, mode_flags
             print (formatting % args)
- 
         # Crtc
-        for crtc in res.crtcs:
-            info = crtc_req[crtc].reply ()
-            if info.status != xcb.randr.SetConfig.Success: raise Exception ("old config")
+        for crtc in self.state.screen_res.crtcs:
+            info = self.state.crtcs[crtc]
             print ("\tCRTC %d" % crtc)
             print ("\t\t%dx%d+%d+%d" % (info.width, info.height, info.x, info.y))
             print ("\t\tOutput[active]: %s" % set_to_text (info.possible, lambda o: o in info.outputs))
@@ -151,11 +182,9 @@ class XRandrClient:
             rot_enabled = lambda r: r & info.rotation
             print ("\t\tRotations[current]: %s" % class_attr (xcb.randr.Rotation, has_rot, rot_enabled))
             print ("\t\tMode: %d" % info.mode)
-
         # Outputs
-        for output in res.outputs:
-            info = output_req[output].reply ()
-            if info.status != xcb.randr.SetConfig.Success: raise Exception ("old config")
+        for output in self.state.screen_res.outputs:
+            info = self.state.outputs[output]
             name = str (bytearray (info.name))
             conn_status = class_attr (xcb.randr.Connection, lambda c: c == info.connection)
             print ("\tOutput %d %s (%s)" % (output, name, conn_status))
@@ -189,7 +218,7 @@ class StdinCmd:
         return sys.stdin.fileno ()
     def activate (self):
         line = sys.stdin.readline ()
-        if "info" in line: self.randr.screen_info ()
+        if "scr_info" in line: self.randr.screen_info ()
         if "test" in line: self.randr.move_down ()
         if "exit" in line: return False
         return True
