@@ -24,9 +24,6 @@ import sys, os, select
 import xclient
 
 # Config
-class Config (object):
-    def __init__ (self):
-        pass
 
 # Commands
 class StdinCmd (object):
@@ -44,12 +41,12 @@ class StdinCmd (object):
 
 # Main event loop
 def event_loop (object_list):
-    '''
+    """
     Use select to wait for objects representing FD ressources.
     Requires for each object:
         int fileno () method
         bool activate () method : returning False stops the loop
-    '''
+    """
     while True:
         activated, _, _ = select.select (object_list, [], [])
         for obj in activated:

@@ -1,4 +1,3 @@
-#!/usr/bin/env python2
 """
 XCB interface part of the multi monitor daemon.
 - Keeps a valid copy of the xrandr state (updating it on events)
