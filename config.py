@@ -15,6 +15,4 @@ class Config (object):
 
 # Entry point
 if __name__ == "__main__":
-    slam_util.compute_screen_positions ((32, 42), [], [])
-    slam_util.compute_screen_positions ((32, 42), [(1, 2), (3, 4)], [(0, 3, 1)])
-    slam_util.compute_screen_positions ((32, 42), [1, (3, 4)], [])
+    slam_util.compute_screen_positions ((32, 42), [(1, 2), (3, 4)], []) #[(0, 3, 1)])
