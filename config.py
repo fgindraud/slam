@@ -1,4 +1,4 @@
-import slam_util
+import slam_ext
 
 # Config
 class Pair (object):
@@ -15,4 +15,4 @@ class Config (object):
 
 # Entry point
 if __name__ == "__main__":
-    slam_util.compute_screen_positions ((32, 42), [(1, 2), (3, 4)], []) #[(0, 3, 1)])
+    print slam_ext.screen_layout ((32, 42), [(1, 2), (3, 4)], []) #[(0, 3, 1)])

@@ -1,1 +1,3 @@
 SLAM - Screen Layout Automatic Manager
+
+python2 setup.py install
