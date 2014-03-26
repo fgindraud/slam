@@ -15,4 +15,4 @@ class Config (object):
 
 # Entry point
 if __name__ == "__main__":
-    print slam_ext.screen_layout ((32, 42), [(1, 2), (3, 4)], []) #[(0, 3, 1)])
+    print slam_ext.screen_layout ((32, 42), [(4, 6), (3, 7), (6, 4)], [(0, slam_ext.dir.left, 1), (0, slam_ext.dir.above, 2)])

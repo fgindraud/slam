@@ -15,11 +15,20 @@ namespace screen_layout {
 	typedef std::vector< pair > pair_list;
 
 	enum dir { none, left, right, above, under };
+	static inline dir invert_dir (dir d) {
+		switch (d) {
+			case none: return none;
+			case left: return right;
+			case right: return left;
+			case above: return under;
+			case under: return above;
+		}
+	}
 
 	typedef std::vector< std::vector< dir > > setting;
 	static inline setting mk_setting (int nb_screen) { return setting (nb_screen, std::vector< dir > (nb_screen, none)); }
 
-	int compute_screen_layout (const pair & vscreen_max_size, const pair_list & screen_sizes, const setting & user_constraints, pair & vscreen_size, pair_list & screen_positions);
+	void compute_screen_layout (const pair & vscreen_max_size, const pair_list & screen_sizes, const setting & user_constraints, pair & vscreen_size, pair_list & screen_positions);
 }
 
 #endif

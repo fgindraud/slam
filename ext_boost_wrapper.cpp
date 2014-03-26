@@ -30,7 +30,8 @@ namespace screen_layout {
 		for (int i = 0; i < py::len (py_constraints); ++i) {
 			py::object t = py_constraints[i];
 			int sa = py::extract< int > (t[0]); int sb = py::extract< int > (t[2]);
-			constraints[sa][sb] = constraints[sb][sa] = py::extract< dir > (t[1]);
+			constraints[sa][sb] = py::extract< dir > (t[1]);
+			constraints[sb][sa] = invert_dir (constraints[sa][sb]);
 		}
 
 		pair_list screen_positions (nb_screen);
