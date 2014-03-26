@@ -2,7 +2,7 @@ from distutils.core import setup, Extension
 
 spam_util_module = Extension ('slam_ext',
         libraries = ['isl', 'boost_python'],
-        sources = ['ext_boost_wrapper.cpp', 'ext_screen_layout.cpp'])
+        sources = ['ext/boost_wrapper.cpp', 'ext/screen_layout.cpp'])
 
 setup (name = 'Slam',
         version = '0.1',

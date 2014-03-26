@@ -1,4 +1,4 @@
-#include "ext_screen_layout.h"
+#include "screen_layout.h"
 
 #include <boost/python.hpp>
 namespace py = boost::python;
