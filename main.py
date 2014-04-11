@@ -21,9 +21,8 @@ Wanted features:
 '''
 
 import sys, os, select
-import xclient
 
-# Config
+import xclient, config
 
 # Commands
 class StdinCmd (object):
@@ -54,10 +53,11 @@ def event_loop (object_list):
 
 # Entry point
 if __name__ == "__main__":
-    xc = xclient.Client ()
-    cmd = StdinCmd (xc)
+    config_manager = config.ConfigManager ()
+    x_client = xclient.Client ()
+    cmd = StdinCmd (x_client)
     try:
-        event_loop ([xc, cmd])
+        event_loop ([x_client, cmd])
     finally:
-        xc.cleanup ()
+        x_client.cleanup ()
     sys.exit (0)

@@ -31,7 +31,7 @@ namespace screen_layout {
 			py::object t = py_constraints[i];
 			int sa = py::extract< int > (t[0]); int sb = py::extract< int > (t[2]);
 			constraints[sa][sb] = py::extract< dir > (t[1]);
-			constraints[sb][sa] = invert_dir (constraints[sa][sb]);
+			constraints[sb][sa] = dir_invert (constraints[sa][sb]);
 		}
 
 		pair_list screen_positions;
@@ -52,13 +52,15 @@ namespace screen_layout {
 BOOST_PYTHON_MODULE (slam_ext) {
 	using namespace boost::python;
 
-	enum_< screen_layout::dir > ("dir")
+	enum_< screen_layout::dir > ("Dir")
 		.value ("none", screen_layout::none)
 		.value ("left", screen_layout::left)
 		.value ("right", screen_layout::right)
 		.value ("above", screen_layout::above)
 		.value ("under", screen_layout::under)
 		;
+	def ("Dir_invert", screen_layout::dir_invert);
+	def ("Dir_str", screen_layout::dir_str);
 
 	def ("screen_layout", screen_layout::py_func, screen_layout::py_doc);
 }

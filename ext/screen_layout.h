@@ -16,13 +16,22 @@ namespace screen_layout {
 	typedef std::vector< pair > pair_list;
 
 	enum dir { none, left, right, above, under };
-	static inline dir invert_dir (dir d) {
+	static inline dir dir_invert (dir d) {
 		switch (d) {
-			case none: return none;
 			case left: return right;
 			case right: return left;
 			case above: return under;
 			case under: return above;
+			default: return none;
+		}
+	}
+	static inline const char * dir_str (dir d) {
+		switch (d) {
+			case left: return "left";
+			case right: return "right";
+			case above: return "above";
+			case under: return "under";
+			default: return "none";
 		}
 	}
 
