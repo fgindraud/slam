@@ -19,9 +19,10 @@ namespace screen_layout {
 		"   [(x0, y0), ...] : sequence of coordinates for screens\n"
 		"}\n";
 
-	static py::object py_func (py::object py_screen_max_size, py::object py_screen_sizes, py::object py_constraints) {
+	static py::object py_func (py::object py_screen_min_size, py::object py_screen_max_size, py::object py_screen_sizes, py::object py_constraints) {
 		int nb_screen = py::len (py_screen_sizes);
 		pair screen_max_size = mk_pair (py_screen_max_size);
+		pair screen_min_size = mk_pair (py_screen_min_size);
 		
 		pair_list screen_sizes;
 		for (int i = 0; i < nb_screen; ++i) screen_sizes.push_back (mk_pair (py_screen_sizes[i]));
@@ -36,7 +37,7 @@ namespace screen_layout {
 
 		pair_list screen_positions;
 		pair screen_size;
-		if (not compute_screen_layout (screen_max_size, screen_sizes, constraints, screen_size, screen_positions))
+		if (not compute_screen_layout (screen_min_size, screen_max_size, screen_sizes, constraints, screen_size, screen_positions))
 			return py::object (); // None
 
 		py::list py_screen_pos;

@@ -22,19 +22,19 @@ Wanted features:
 
 import sys, os, select
 
-import xclient, config
+import config
+import xcb_backend
 
 # Commands
 class StdinCmd (object):
     """ Very simple command line testing tool """
-    def __init__ (self, xclient):
-        self.xclient = xclient
+    def __init__ (self, backend):
+        self.backend = backend
     def fileno (self): return sys.stdin.fileno ()
     def activate (self):
         """ Pick one line a time, and check for keywords """
         line = sys.stdin.readline ()
-        if "info" in line: self.xclient.state_info ()
-        if "test" in line: self.xclient.move_down ()
+        if "info" in line: xcb_backend.print_state (self.backend)
         if "exit" in line: return False
         return True
 
@@ -53,11 +53,11 @@ def event_loop (object_list):
 
 # Entry point
 if __name__ == "__main__":
-    config_manager = config.ConfigManager ()
-    x_client = xclient.Client ()
-    cmd = StdinCmd (x_client)
+    backend = xcb_backend.LayoutBackend ()
+    config_manager = config.ConfigManager (backend)
+    cmd = StdinCmd (backend)
     try:
-        event_loop ([x_client, cmd])
+        event_loop ([backend, cmd])
     finally:
-        x_client.cleanup ()
+        backend.cleanup ()
     sys.exit (0)

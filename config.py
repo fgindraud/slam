@@ -3,7 +3,7 @@ import math
 
 # Pair of objects
 class Pair (object):
-    def __init__ (self, x, y = None):
+    def __init__ (self, x = None, y = None):
         """ Takes a pair of values, or an iterable """
         if y == None: x, y = x
         self.x, self.y = x, y
@@ -13,10 +13,12 @@ class Pair (object):
     def __add__ (self, other): return Pair (self.x + other.x, self.y + other.y)
     def __neg__ (self): return Pair (-self.x, -self.y)
     def __sub__ (self, other): return self + (-other)
+    def __eq__ (self, other): return self.x == other.x and self.y == other.y
+    def __ne__ (self, other): return not (self == other)
 
     def __str__ (self): return "(%s,%s)" % (str (self.x), str (self.y))
     def __repr__ (self): return "(%s,%s)" % (repr (self.x), repr (self.y))
-    def tuple (self): return self.x, self.y
+    def __iter__ (self): return iter ((self.x, self.y))
 
 # Directions
 Dir = slam_ext.Dir
@@ -42,15 +44,20 @@ class Output (object):
         self.base_size = Pair (0, 0)
         self.edid = None
         
-        # User settings
+        # User
         self.enabled = False
         self.rotation = Rotation ()
+        self.position = Pair (0, 0)
+        
+        # Props
+        self.backlight = None # (value, lowest, highest)
 
     def size (self): return self.rotation.true_size (self.base_size)
     def identifier (self): return self.name + (":" + self.edid if self.edid else "")
 
 class Config (object):
     def __init__ (self):
+        self.virtual_screen_size = Pair (0, 0)
         self.output_by_name = dict ()
         self.output_relations = dict () # map : name pair -> Dir
    
@@ -62,12 +69,7 @@ class Config (object):
         """ Key for ConfigManager """
         return frozenset ([o.identifier () for o in self.output_by_name.values ()])
 
-    def relations_to_absolute_positions (self, vscreen_limits):
-        """
-        Compute absolute positions of screen layout :
-            int Pair : vscreen size
-            screen-name -> int Pair : positions of screens
-        """
+    def compute_absolute_positions (self, vscreen_min, vscreen_max):
         # Convert arguments
         outputs = [o for o in self.output_by_name.values () if o.enabled]
         constraints = []
@@ -77,28 +79,34 @@ class Config (object):
                 if d != Dir.none:
                     constraints.append ((i, d, j))
         # Compute
-        r = slam_ext.screen_layout (vscreen_limits.tuple (), [o.size ().tuple () for o in outputs], constraints)
+        r = slam_ext.screen_layout (vscreen_min, vscreen_max, [o.size () for o in outputs], constraints)
         if r == None: raise Exception ("unable to compute valid layout")
         # Convert back results
-        vscreen_size, screen_pos = r
-        return (Pair (vscreen_size), dict ([(outputs[i].name, Pair (screen_pos[i])) for i in range (len (outputs))]))
+        self.virtual_screen_size = Pair (r[0])
+        for i in range (len (outputs)): outputs[i].position = Pair (r[1][i])
 
-    def relations_from_absolute_positions (self, screen_positions):
-        """ Extracts some relations from absolute position """
+    def compute_relations (self):
         # Add relations to screens that are border to border
+        outputs = [o for o in self.output_by_name.values () if o.enabled]
         self.output_relations.clear ()
-        for san in screen_positions:
-            for sbn in screen_positions:
-                if san != sbn:
-                    sa_bottomright, sb_topleft = screen_positions[san] + self.output_by_name[san].size (), screen_positions[sbn]
-                    if sa_bottomright.x == sb_topleft.x: self.add_relation (san, sbn, Dir.left)
-                    if sa_bottomright.y == sb_topleft.y: self.add_relation (san, sbn, Dir.above)
-
+        for oa in outputs:
+            for ob in outputs:
+                if oa.name != ob.name:
+                    oa_bottomright, ob_topleft = oa.position + oa.size (), ob.position
+                    if oa_bottomright.x == ob_topleft.x: self.add_relation (oa.name, ob.name, Dir.left)
+                    if oa_bottomright.y == ob_topleft.y: self.add_relation (oa.name, ob.name, Dir.above)
 
 class ConfigManager (object):
-    def __init__ (self, vscreen_limits):
-        self.vscreen_limits = vscreen_limits
-        self.configurations = dict () 
+    def __init__ (self, layout_backend):
+        self.layout_backend = layout_backend
+        self.virtual_screen_limits = layout_backend.get_virtual_screen_limits ()
+        layout_backend.set_config_changed_callback (lambda new_config: self.config_changed (new_config))
+
+        self.current_config = None
+        self.configurations = dict ()
+
+    def config_changed (self, new_config):
+        pass
 
     def set_config (self, conf):
         self.configurations[conf.key ()] = conf

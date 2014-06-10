@@ -35,12 +35,12 @@ namespace screen_layout {
 		 * Metric is : sum of distance between centers of each related screen.
 		 */
 		public:
-			rectangle_packer (int _nb_screen, const pair & vscreen_max_size, const pair_list & screen_sizes, const sequence_pair & layout) : nb_screen (_nb_screen) {
+			rectangle_packer (int _nb_screen, const pair & vscreen_min_size, const pair & vscreen_max_size, const pair_list & screen_sizes, const sequence_pair & layout) : nb_screen (_nb_screen) {
 				init_solver (nb_screen);
 
 				// Virtual screen boundaries
-				positive_or_zero (v_vscreen_size (X)); less_than_const (v_vscreen_size (X), vscreen_max_size.x);
-				positive_or_zero (v_vscreen_size (Y)); less_than_const (v_vscreen_size (Y), vscreen_max_size.y);
+				more_than_const (v_vscreen_size (X), vscreen_min_size.x); less_than_const (v_vscreen_size (X), vscreen_max_size.x);
+				more_than_const (v_vscreen_size (Y), vscreen_min_size.y); less_than_const (v_vscreen_size (Y), vscreen_max_size.y);
 
 				// Screens inside virtual screen
 				for (int sc = 0; sc < nb_screen; ++sc) {
@@ -152,9 +152,13 @@ namespace screen_layout {
 
 			// Polyhedral contraints
 			void positive_or_zero (int v) { // 0 <= v
-				isl_constraint * positive = isl_inequality_alloc (isl_local_space_copy (ls));
-				positive = isl_constraint_set_coefficient_si (positive, isl_dim_set, v, 1);
-				solutions = isl_set_add_constraint (solutions, positive); 
+				more_than_const (v, 0);
+			}
+			void more_than_const (int v, int constant) { // constant <= v
+				isl_constraint * more = isl_inequality_alloc (isl_local_space_copy (ls));
+				more = isl_constraint_set_coefficient_si (more, isl_dim_set, v, 1);
+				more = isl_constraint_set_constant_si (more, -constant);
+				solutions = isl_set_add_constraint (solutions, more); 
 			}
 			void less_than_const (int v, int constant) { // v <= constant
 				isl_constraint * less = isl_inequality_alloc (isl_local_space_copy (ls));
@@ -208,7 +212,7 @@ namespace screen_layout {
 			}
 	};
 
-	bool compute_screen_layout (const pair & vscreen_max_size, const pair_list & screen_sizes, const setting & user_constraints, pair & vscreen_size, pair_list & screen_positions) {
+	bool compute_screen_layout (const pair & vscreen_min_size, const pair & vscreen_max_size, const pair_list & screen_sizes, const setting & user_constraints, pair & vscreen_size, pair_list & screen_positions) {
 		int nb_screen = screen_sizes.size ();
 		bool found = false;
 		long last_objective;
@@ -224,7 +228,7 @@ namespace screen_layout {
 
 			if (ok) {
 				// Compute positions	
-				rectangle_packer packer (nb_screen, vscreen_max_size, screen_sizes, seq_pair);
+				rectangle_packer packer (nb_screen, vscreen_min_size, vscreen_max_size, screen_sizes, seq_pair);
 				if (packer.solve ()) {
 					long objective = packer.objective ();
 					pair virtual_screen_size = packer.virtual_screen ();

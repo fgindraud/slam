@@ -38,7 +38,7 @@ namespace screen_layout {
 	typedef std::vector< std::vector< dir > > setting;
 	static inline setting mk_setting (int nb_screen) { return setting (nb_screen, std::vector< dir > (nb_screen, none)); }
 
-	bool compute_screen_layout (const pair & vscreen_max_size, const pair_list & screen_sizes, const setting & user_constraints, pair & vscreen_size, pair_list & screen_positions);
+	bool compute_screen_layout (const pair & vscreen_min_size, const pair & vscreen_max_size, const pair_list & screen_sizes, const setting & user_constraints, pair & vscreen_size, pair_list & screen_positions);
 }
 
 #endif
