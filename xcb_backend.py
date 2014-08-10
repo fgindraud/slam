@@ -105,7 +105,7 @@ class LayoutBackend (object):
             for o in self.screen_res.outputs:
                 self.outputs[o], restart = check_reply (output_req[o].reply (), restart)
                 self.outputs[o].name = str (bytearray (self.outputs[o].name))
-                if self.is_output_enabled (o): self.outputs[o].props = self.prop_query.get_properties (o)
+                if self.is_output_connected (o): self.outputs[o].props = self.prop_query.get_properties (o)
 
     def synchronize_state (self):
         # List of events
@@ -126,7 +126,28 @@ class LayoutBackend (object):
         # Update whole state
         self.update_state ()
 
-    def is_output_enabled (self, o): return self.outputs[o].connection == xcb.randr.Connection.Connected
+    def is_output_connected (self, o):
+        return self.outputs[o].connection == xcb.randr.Connection.Connected
+    def is_output_enabled (self, o):
+        c = self.outputs[o].crtc
+        return c in self.crtcs && self.crtcs[c].mode != 0
+    def mode_by_id (self, i):
+        for mode in self.screen_res.modes:
+            if mode.id == i: return mode
+        raise Exception ("RandR: mode %d not found" % i)
+
+    def export_config (self):
+        conf = config.Config ()
+        for o, output in self.outputs.items ():
+            if self.is_output_connected (o):
+                crtc = self.crtcs[output.crtc]
+                mode = self.mode_by_id (crtc.mode)
+                
+                c_output = config.Output (output.name, output.props["EDID"])
+                c_output.enabled = self.is_output_enabled (out_id)
+                if c_output.enabled:
+                    c_output.base_size = config.Pair (mode.width, mode.height)
+                conf.add_output (c_output)
 
 ### EXPERIMENTAL
 #def move_down (self):
@@ -167,13 +188,13 @@ class Properties:
     def get_properties (self, output): return dict ((name, getattr (self, "get_" + name.lower ()) (output, atom)) for name, atom in self.atoms.items ())
 
     @staticmethod
-    def prop_not_found (reply): return reply.format == 0 and reply.type == xcb.xproto.Atom._None and reply.bytes_after == 0 and reply.num_items == 0
+    def not_found (reply): return reply.format == 0 and reply.type == xcb.xproto.Atom._None and reply.bytes_after == 0 and reply.num_items == 0
 
     def get_backlight (self, output, prop_atom):
         """ Backlight Xcb property (value, lowest, highest) """
         # Data : backlight value
         data = self.conn.randr.GetOutputProperty (output, prop_atom, xcb.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
-        if Properties.prop_not_found (data): return None
+        if Properties.not_found (data): return None
 
         if not (data.format > 0 and data.type == xcb.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items == 1): raise Exception ("Randr: invalid BACKLIGHT value formatting")
         if data.format == 8: (value,) = struct.unpack_from ("b", bytearray (data.data))
@@ -193,7 +214,7 @@ class Properties:
         """ EDID (unique device identifier) Xcb property (str) """
         # Data
         data = self.conn.randr.GetOutputProperty (output, prop_atom, xcb.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
-        if Properties.prop_not_found (data): raise Exception ("Randr: EDID property not found")
+        if Properties.not_found (data): raise Exception ("Randr: EDID property not found")
         if not (data.format == 8 and data.type == xcb.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items > 0): raise Exception ("Randr: invalid EDID value formatting")
         return ''.join (["%x" % b for b in data.data])
 
@@ -237,7 +258,7 @@ def print_state (state):
         info = state.outputs[o]
         conn_status = class_attrs_iterable_str (xcb.randr.Connection, lambda c: c == info.connection)
         print ("\tOutput %d %s (%s)" % (o, info.name, conn_status))
-        if state.is_output_enabled (o):
+        if state.is_output_connected (o):
             print ("\t\tPhy size: %dmm x %dmm" % (info.mm_width, info.mm_height))
             print ("\t\tCrtcs[active]: %s" % iterable_str (info.crtcs, lambda c: c == info.crtc))
             print ("\t\tClones: %s" % iterable_str (info.clones))

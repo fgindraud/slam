@@ -38,11 +38,11 @@ class Rotation (object):
         return base_size.swap () if Rotation.rotations[self.rot] else base_size
 
 class Output (object):
-    def __init__ (self):
+    def __init__ (self, name, edid):
         # System constant properties
-        self.name = ""
+        self.name = name
         self.base_size = Pair (0, 0)
-        self.edid = None
+        self.edid = edid
         
         # User
         self.enabled = False
@@ -53,7 +53,7 @@ class Output (object):
         self.backlight = None # (value, lowest, highest)
 
     def size (self): return self.rotation.true_size (self.base_size)
-    def identifier (self): return self.name + (":" + self.edid if self.edid else "")
+    def identifier (self): return self.name + ":" + self.edid
 
 class Config (object):
     def __init__ (self):
@@ -61,6 +61,8 @@ class Config (object):
         self.output_by_name = dict ()
         self.output_relations = dict () # map : name pair -> Dir
    
+    def add_output (self, output):
+        self.output_by_name[output.name] = output
     def add_relation (self, sa, sb, relation):
         self.output_relations[sa, sb] = relation
         self.output_relations[sb, sa] = relation.invert ()
