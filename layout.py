@@ -63,27 +63,28 @@ class Layout (object):
     def load (self, data):
         pass
 
-class LayoutSet (object):
+class Config (object):
+    '''
+    Manages a set of layouts for a given tag set
+    '''
     def __init__ (self):
         self.layouts = dict () # frozenset( (name,edid=null) ) -> Layout ()
 
     def dump (self): pass
     def load (self, data): pass
 
-class LayoutManager (object):
+class Manager (object):
+    '''
+    Manages a set of configs
+    '''
     def __init__ (self):
-        self.layoutsets_by_tags = dict () # frozenset ( str ) -> LayoutSet ()
+        self.configs = dict () # frozenset ( str ) -> Config ()
         self.current_tags = set () #
 
         self.current_backend_layout = None
 
-    def modify (self):
-        # find a way...
-        pass
-
     def backend_layout_changed (self, backend_layout):
         pass
-
 
     def dump (self):
         ''' Output all stored layouts as a string (uses pickle) '''
@@ -116,7 +117,7 @@ class BackendLayout (object):
 
     # Import/export
     @staticmethod
-    def from_layout (layout, sizes, vscreen_min, vscreen_max):
+    def from_layout (layout, vscreen_min, vscreen_max, sizes):
         '''
         Builds a new backend layout object from an abstract layout and external info
         Absolute layout positionning uses the c++ isl extension
@@ -130,17 +131,12 @@ class BackendLayout (object):
         # Compute absolute layout
         enabled_outputs = [name for name, o in r.outputs.items () if o.enabled]
         enabled_sizes = [r.outputs[n].size () for n in enabled_outputs]
-        constraints = []
-        for i in range (len (enabled_outputs)):
-            for j in range (i):
-                d = layout.outputs[enabled_outputs[i]].neighbours[enabled_outputs[j]
-                if d != Dir.none:
-                    constraints.append ((i, d, j))
-        res = slam_ext.screen_layout (vscreen_min, vscreen_max, enabled_outputs, constraints)
+        constraints = [ [ layout.outputs[na].neighbours[nb] for nb in enabled_outputs ] for na in enabled_outputs ]
+        res = slam_ext.screen_layout (vscreen_min, vscreen_max, enabled_sizes, constraints)
         if res == None: return None
         # Fill result
         r.screen_size = Pair (res[0])
-        for i in range (len (enabled_outputs)): r.outputs[enabled_outputs[i]].position = Pair (r[1][i])
+        for i in range (len (enabled_outputs)): r.outputs[enabled_outputs[i]].position = Pair (res[1][i])
         return r
 
     def to_layout (self):
@@ -156,11 +152,8 @@ class BackendLayout (object):
         for na, oa in self.outputs.items ():
             for nb, ob in self.outputs.items ():
                 if oa.enabled and ob.enabled and na != nb:
-                    oa_corner = oa.position + oa.size ()
-                    rel = Dir.none
-                    if oa_corner.x == ob.position.x and (oa.position.y < ob_corner.y or oa_corner.y > ob.position.y): rel = Dir.left
-                    if oa_corner.y == ob.position.y and (oa.position.x < ob_corner.x or oa_corner.x > ob.position.x): rel = Dir.above
-                    oa.neighbours[nb] = rel
-                    ob.neighbours[na] = rel.invert ()
+                    oa_corner, ob_corner = oa.position + oa.size (), ob.position + ob.size ()
+                    if oa_corner.x == ob.position.x and (oa.position.y < ob_corner.y or oa_corner.y > ob.position.y): oa.neighbours[nb], ob.neighbours[na] = Dir.left, Dir.right
+                    if oa_corner.y == ob.position.y and (oa.position.x < ob_corner.x or oa_corner.x > ob.position.x): oa.neighbours[nb], ob.neighbours[na] = Dir.above, Dir.under
         return r
 

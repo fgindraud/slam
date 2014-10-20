@@ -12,7 +12,7 @@ namespace screen_layout {
 		"Input {\n"
 		"   (w, h) : virtual screen maximum size\n"
 		"   [(w0, h0), ...] : screen sizes\n"
-		"   [(sA, constraint, sB), ...] : sequence of relation between screens\n"
+		"   [[c00, c01, ...], [c10, ...], ...] : relation between screens as a matrix\n"
 		"}\n"
 		"Output {\n"
 		"   (w, h) : virtual screen size\n"
@@ -28,11 +28,10 @@ namespace screen_layout {
 		for (int i = 0; i < nb_screen; ++i) screen_sizes.push_back (mk_pair (py_screen_sizes[i]));
 		
 		setting constraints = mk_setting (nb_screen);
-		for (int i = 0; i < py::len (py_constraints); ++i) {
+		for (int i = 0; i < py::len (py_constraints) && i < nb_screen; ++i) {
 			py::object t = py_constraints[i];
-			int sa = py::extract< int > (t[0]); int sb = py::extract< int > (t[2]);
-			constraints[sa][sb] = py::extract< dir > (t[1]);
-			constraints[sb][sa] = dir_invert (constraints[sa][sb]);
+			for (int j = 0; j < py::len (t) && j < nb_screen; ++j)
+				constraints[i][j] = py::extract< dir > (t[j]);
 		}
 
 		pair_list screen_positions;
