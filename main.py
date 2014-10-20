@@ -22,7 +22,7 @@ Wanted features:
 
 import sys, os, select
 
-import config
+import layout
 import xcb_backend
 
 # Commands
@@ -54,7 +54,7 @@ def event_loop (object_list):
 # Entry point
 if __name__ == "__main__":
     backend = xcb_backend.LayoutBackend ()
-    config_manager = config.ConfigManager (backend)
+    #config_manager = config.ConfigManager (backend)
     cmd = StdinCmd (backend)
     try:
         event_loop ([backend, cmd])

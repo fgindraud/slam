@@ -7,6 +7,6 @@ spam_util_module = Extension ('slam_ext',
 setup (name = 'Slam',
         version = '0.1',
         description = 'Screen layout manager',
-        py_modules = ['main', 'config', 'xcb_backend'],
+        py_modules = ['main', 'layout', 'xcb_backend'],
         ext_modules = [spam_util_module])
 

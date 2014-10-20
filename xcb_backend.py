@@ -10,6 +10,10 @@ import xcb, xcb.xproto, xcb.randr
 
 import config
 
+class RandrError (Exception):
+    def __init__ (self, text): self.text = text
+    def __str__ (self): return "Randr error: " + self.text
+
 class LayoutBackend (object):
     randr_version = 1, 3
 
@@ -60,8 +64,8 @@ class LayoutBackend (object):
         version_reply = self.conn.randr.QueryVersion (*LayoutBackend.randr_version).reply ()
         version = version_reply.major_version, version_reply.minor_version
         if (not version >= LayoutBackend.randr_version):
-            msg_format = "RandR version: requested >= {0[0]}.{0[1]}, got {1[0]}.{1[1]}"
-            raise Exception (msg_format.format (Client.randr_version, version))
+            msg_format = "version: requested >= {0[0]}.{0[1]}, got {1[0]}.{1[1]}"
+            raise RandrError (msg_format.format (Client.randr_version, version))
 
         # Properties query object
         self.prop_query = Properties (self.conn)
@@ -130,11 +134,11 @@ class LayoutBackend (object):
         return self.outputs[o].connection == xcb.randr.Connection.Connected
     def is_output_enabled (self, o):
         c = self.outputs[o].crtc
-        return c in self.crtcs && self.crtcs[c].mode != 0
+        return c in self.crtcs and self.crtcs[c].mode != 0
     def mode_by_id (self, i):
         for mode in self.screen_res.modes:
             if mode.id == i: return mode
-        raise Exception ("RandR: mode %d not found" % i)
+        raise RandrError ("mode %d not found" % i)
 
     def export_config (self):
         conf = config.Config ()
@@ -169,7 +173,7 @@ class LayoutBackend (object):
 
 def check_reply (reply, restart = False):
     """ Check a Xcb reply with a status field (for error or for outdated timestamps) """
-    if reply.status == xcb.randr.SetConfig.Failed: raise Exception ("Randr: request failed")
+    if reply.status == xcb.randr.SetConfig.Failed: raise RandrError ("request failed")
     elif reply.status != xcb.randr.SetConfig.Success: return (reply, True)
     else: return (reply, restart)
 
@@ -196,17 +200,17 @@ class Properties:
         data = self.conn.randr.GetOutputProperty (output, prop_atom, xcb.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
         if Properties.not_found (data): return None
 
-        if not (data.format > 0 and data.type == xcb.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items == 1): raise Exception ("Randr: invalid BACKLIGHT value formatting")
+        if not (data.format > 0 and data.type == xcb.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items == 1): raise RandrError ("invalid BACKLIGHT value formatting")
         if data.format == 8: (value,) = struct.unpack_from ("b", bytearray (data.data))
         elif data.format == 16: (value,) = struct.unpack_from ("h", bytearray (data.data))
         elif data.format == 32: (value,) = struct.unpack_from ("i", bytearray (data.data))
-        else: raise Exception ("Randr: invalid BACKLIGHT value formatting")
+        else: raise RandrError ("invalid BACKLIGHT value formatting")
         
         # Config : backlight value range
         config = self.conn.randr.QueryOutputProperty (output, prop_atom).reply ()
-        if not (config.range and len (config.validValues) == 2): raise Exception ("Randr: invalid BACKLIGHT config")
+        if not (config.range and len (config.validValues) == 2): raise RandrError ("invalid BACKLIGHT config")
         lowest, highest = config.validValues[0], config.validValues[1]
-        if not (lowest <= value and value <= highest): raise Exception ("Randr: BACKLIGHT value out of bounds")
+        if not (lowest <= value and value <= highest): raise RandrError ("BACKLIGHT value out of bounds")
         
         return (value, lowest, highest)
 
@@ -214,8 +218,8 @@ class Properties:
         """ EDID (unique device identifier) Xcb property (str) """
         # Data
         data = self.conn.randr.GetOutputProperty (output, prop_atom, xcb.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
-        if Properties.not_found (data): raise Exception ("Randr: EDID property not found")
-        if not (data.format == 8 and data.type == xcb.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items > 0): raise Exception ("Randr: invalid EDID value formatting")
+        if Properties.not_found (data): raise RandrError ("EDID property not found")
+        if not (data.format == 8 and data.type == xcb.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items > 0): raise RandrError ("invalid EDID value formatting")
         return ''.join (["%x" % b for b in data.data])
 
 #############################
