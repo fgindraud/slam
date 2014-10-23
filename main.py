@@ -53,8 +53,8 @@ def event_loop (object_list):
 
 # Entry point
 if __name__ == "__main__":
-    backend = xcb_backend.LayoutBackend ()
-    #config_manager = config.ConfigManager (backend)
+    backend = xcb_backend.Backend ()
+    config_manager = layout.Manager (backend)
     cmd = StdinCmd (backend)
     try:
         event_loop ([backend, cmd])
