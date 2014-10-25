@@ -34,7 +34,7 @@ class StdinCmd (object):
     def activate (self):
         """ Pick one line a time, and check for keywords """
         line = sys.stdin.readline ()
-        if "info" in line: xcb_backend.print_state (self.backend)
+        if "info" in line: self.backend.debug_dump ()
         if "exit" in line: return False
         return True
 

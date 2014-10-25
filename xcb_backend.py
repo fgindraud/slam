@@ -32,20 +32,20 @@ class Backend (object):
         self.flush_messages ()
         self.reload_state ()
         if self.update_callback: self.update_callback (self.to_concrete_layout ())
-        return True
+        return True # continue
+
+    def debug_dump (self):
+        print (dump_state (self))
 
     ###########################
     # ConfigManager Interface #
     ###########################
 
-    def get_virtual_screen_min_size (self):
-        return layout.Pair (self.screen_limits.min_width, self.screen_limits.min_height)
-    def get_virtual_screen_max_size (self):
-        return layout.Pair (self.screen_limits.max_width, self.screen_limits.max_height)
+    def get_virtual_screen_min_size (self): return layout.Pair (self.screen_limits.min_width, self.screen_limits.min_height)
+    def get_virtual_screen_max_size (self): return layout.Pair (self.screen_limits.max_width, self.screen_limits.max_height)
     def get_preferred_sizes_by_output (self):
-        """ returns the best size for each output (biggest) """
-        def convert_mode (mode): return layout.Pair (mode.width, mode.height)
-        return dict ([(o.name, convert_mode (self.mode_by_id (o.modes[0]))) for o in self.outputs.values ()])
+        """ Returns the best size for each output (biggest) """
+        return dict ([(o.name, self.mode_size_by_id (o.modes[0])) for o in self.outputs.values () if len (o.modes) > 0])
 
     def attach (self, callback):
         self.update_callback = callback
@@ -67,9 +67,8 @@ class Backend (object):
         self.conn.randr = self.conn (xcb.randr.key)
         version_reply = self.conn.randr.QueryVersion (*Backend.randr_version).reply ()
         version = version_reply.major_version, version_reply.minor_version
-        if (not version >= LayoutBackend.randr_version):
-            msg_format = "version: requested >= {0[0]}.{0[1]}, got {1[0]}.{1[1]}"
-            raise RandrError (msg_format.format (Client.randr_version, version))
+        if (not version >= Backend.randr_version):
+            raise RandrError ("version: requested >= %s, got %s" % (str (Client.randr_version), str (version)))
 
         # Properties query object
         self.prop_manager = Properties (self.conn)
@@ -111,7 +110,7 @@ class Backend (object):
         for o in self.screen_res.outputs:
             self.outputs[o], failed = check_reply (output_req[o].reply (), failed)
             self.outputs[o].name = str (bytearray (self.outputs[o].name))
-            if self.is_output_connected (o): self.outputs[o].props = self.prop_manager.get_properties (o)
+            if self.is_connected (o): self.outputs[o].props = self.prop_manager.get_properties (o)
         return not failed
 
     def flush_messages (self):
@@ -127,29 +126,31 @@ class Backend (object):
                 if ev.subCode == xcb.randr.Notify.OutputChange: print ("OutputChange[%d]" % ev.u.oc.output)
                 if ev.subCode == xcb.randr.Notify.OutputProperty: print ("OutputProperty[%d]" % ev.u.op.output)
 
-    # export part
-    def is_output_enabled (self, o):
-        c = self.outputs[o].crtc
-        return c in self.crtcs and self.crtcs[c].mode != 0
-    def mode_by_id (self, i):
-        for mode in self.screen_res.modes:
-            if mode.id == i: return mode
-        raise RandrError ("mode %d not found" % i)
+    def is_connected (self, output):
+        return self.outputs[output].connection == xcb.randr.Connection.Connected
+    def mode_size_by_id (self, i):
+        try: [mode] = [m for m in self.screen_res.modes if m.id == i]
+        except: raise RandrError ("mode %d not found" % i)
+        return layout.Pair (mode.width, mode.height)
+    def mode_exists (self, i):
+        return len ([m for m in self.screen_res.modes if m.id == i]) == 1
+
+    
     def to_concrete_layout (self):
-        connected_output_ids = [i for i in self.outputs if self.outputs[i].connection == xcb.randr.Connection.Connected]
-        concrete = layout.ConcreteLayout ([self.outputs[i].name for i in connected_output_ids])
-        for i in connected_output_ids:
-            xcb_output = self.outputs[i]
-            layout_output = concrete.outputs[xcb_output.name]
-            layout_output.edid, layout_output.enabled = xcb_output.props["EDID"], self.is_output_enabled (i)
-            if layout_output.enabled:
-                crtc = self.crtcs[output.crtc]
-                mode = self.mode_by_id (crtc.mode)
-                layout_output.base_size = layout.Pair (mode.width, mode.height)
-                layout_output.position = layout.Pair (crtc.x, crtc.y)
-                layout_output.transposed, layout_output.rotation = False, 0
-
-
+        def make_entry (output_id):
+            x_o = self.outputs[i]
+            l_o = layout.ConcreteLayout.Output (edid = x_o.props["EDID"])
+            c = self.crtcs.get (x_o.crtc, None)
+            if c and self.mode_exists (c.mode):
+                if not Transform.check_xcb_available_transform (c.rotations): raise RandrError ("output %s has not all required rotations available" % x_o.name)
+                l_o.enabled, l_o.base_size, l_o.position, l_o.transform = True, self.mode_size_by_id (c.mode), layout.Pair (c.x, c.y), Transform.xcb_to_slam (c.rotation)
+            return (x_o.name, l_o)
+        connected_output_ids = [i for i in self.outputs if self.is_connected (i)]
+        virtual_screen_size = layout.Pair (self.screen_setup.width_in_pixels, self.screen_setup.height_in_pixels)
+        concrete = layout.ConcreteLayout (dict ([make_entry (i) for i in connected_output_ids]), virtual_screen_size)
+        concrete.compute_manual_flag (self.get_preferred_sizes_by_output ())
+        return concrete
+        
 
 ### EXPERIMENTAL
 #def move_down (self):
@@ -183,11 +184,19 @@ class Transform (object):
     xcb_masks = dict ([(r, getattr (xcb.randr.Rotation, "Rotate_" + str (r))) for r in layout.Transform.rotations])
 
     @staticmethod
-    def xcb_to_slam (mask):
-        rx, ry = bool (mask & xcb.randr.Rotation.Reflect_X), bool (mask & xcb.randr.Rotation.Reflect_Y)
-        try: [rot] = [r for r, m in Transform.xcb_masks.items () if m & mask]
-        except: raise RandrError ("output has no rotation flag")
+    def check_xcb_available_transform (mask):
+        """ we need reflect x and all rotations """
+        m = reduce (lambda a, v: a | v, Transform.xcb_masks.values ()) | xcb.randr.Rotation.Reflect_X
+        return m & mask == m
 
+    @staticmethod
+    def xcb_to_slam (mask):
+        try: [rot] = [r for r, m in Transform.xcb_masks.items () if m & mask]
+        except: raise RandrError ("Xcb transformation has 0 or >1 rotation flags")
+        slam = layout.Transform ()
+        if mask & xcb.randr.Rotation.Reflect_X: slam = slam.reflectx ()
+        if mask & xcb.randr.Rotation.Reflect_Y: slam = slam.reflecty ()
+        return slam.rotate (rot)
 
     @staticmethod
     def slam_to_xcb (slam):
@@ -211,7 +220,9 @@ class Properties:
     def not_found (reply): return reply.format == 0 and reply.type == xcb.xproto.Atom._None and reply.bytes_after == 0 and reply.num_items == 0
 
     def get_backlight (self, output, prop_atom):
-        """ Backlight Xcb property (value, lowest, highest) """
+        """
+        Backlight Xcb property (value, lowest, highest)
+        """
         # Data : backlight value
         data = self.conn.randr.GetOutputProperty (output, prop_atom, xcb.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
         if Properties.not_found (data): return None
@@ -228,16 +239,18 @@ class Properties:
         return (value, lowest, highest)
 
     def get_edid (self, output, prop_atom):
-        """ EDID (unique device identifier) Xcb property (str) """
+        """
+        EDID (unique device identifier) Xcb property (str)
+        """
         # Data
         data = self.conn.randr.GetOutputProperty (output, prop_atom, xcb.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
         if Properties.not_found (data): raise RandrError ("EDID property not found")
         if not (data.format == 8 and data.type == xcb.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items > 0): raise RandrError ("invalid EDID value formatting")
         return ''.join (["%x" % b for b in data.data])
 
-#############################
-# Xrandr state pretty print #
-#############################
+###########################
+# Xrandr state debug info #
+###########################
 
 def iterable_str (iterable, func_highlight = lambda e: False, func_str = str):
     """ Stringify an iterable object, highlighting some elements depending on func_highlight. """
@@ -249,37 +262,37 @@ def class_attrs_iterable_str (class_name, func_filter_attr, func_highlight = lam
     attrs = [attr for attr in dir (class_name) if func_keep_attr (attr)]
     return iterable_str (attrs, lambda a: func_highlight (getattr (class_name, a)))
 
-def print_state (state):
-    """ Pretty prints the Xcb state copy """
+def dump_state (state):
+    """ Pretty dump of Xcb state """
     # Screen
-    print ("Screen: %dx%d" % (state.screen_setup.width_in_pixels, state.screen_setup.height_in_pixels))
+    acc = "Screen: %dx%d\n" % (state.screen_setup.width_in_pixels, state.screen_setup.height_in_pixels)
     # Modes
     for mode in state.screen_res.modes:
         mode_flags = "" #class_attr (xcb.randr.ModeFlag, lambda a: True)
         freq = mode.dot_clock / (mode.htotal * mode.vtotal)
-        formatting = "\tMode %d  \t%dx%d  \t%f\t%s"
-        args = mode.id, mode.width, mode.height, freq, mode_flags
-        print (formatting % args)
+        acc += "\tMode %d  \t%dx%d  \t%f\t%s\n" % (mode.id, mode.width, mode.height, freq, mode_flags)
     # Crtc
     for c in state.screen_res.crtcs:
         info = state.crtcs[c]
-        print ("\tCRTC %d" % c)
-        print ("\t\t%dx%d+%d+%d" % (info.width, info.height, info.x, info.y))
-        print ("\t\tOutput[active]: %s" % iterable_str (info.possible, lambda o: o in info.outputs))
+        acc += "\tCRTC %d\n" % c
+        acc += "\t\t%dx%d+%d+%d\n" % (info.width, info.height, info.x, info.y)
+        acc += "\t\tOutput[active]: %s\n" % iterable_str (info.possible, lambda o: o in info.outputs)
         has_rot = lambda r: r & info.rotations
         rot_enabled = lambda r: r & info.rotation
-        print ("\t\tRotations[current]: %s" % class_attrs_iterable_str (xcb.randr.Rotation, has_rot, rot_enabled))
-        print ("\t\tMode: %d" % info.mode)
+        acc += "\t\tRotations[current]: %s\n" % class_attrs_iterable_str (xcb.randr.Rotation, has_rot, rot_enabled)
+        acc += "\t\tMode: %d\n" % info.mode
     # Outputs
     for o in state.screen_res.outputs:
         info = state.outputs[o]
         conn_status = class_attrs_iterable_str (xcb.randr.Connection, lambda c: c == info.connection)
-        print ("\tOutput %d %s (%s)" % (o, info.name, conn_status))
+        acc += "\tOutput %d %s (%s)\n" % (o, info.name, conn_status)
         if info.connection == xcb.randr.Connection.Connected:
-            print ("\t\tPhy size: %dmm x %dmm" % (info.mm_width, info.mm_height))
-            print ("\t\tCrtcs[active]: %s" % iterable_str (info.crtcs, lambda c: c == info.crtc))
-            print ("\t\tClones: %s" % iterable_str (info.clones))
+            acc += "\t\tPhy size: %dmm x %dmm\n" % (info.mm_width, info.mm_height)
+            acc += "\t\tCrtcs[active]: %s\n" % iterable_str (info.crtcs, lambda c: c == info.crtc)
+            acc += "\t\tClones: %s\n" % iterable_str (info.clones)
             mode_id_str = lambda i: str (info.modes[i])
             mode_id_preferred = lambda i : i < info.num_preferred
-            print ("\t\tModes[pref]: %s" % iterable_str (range (len (info.modes)), mode_id_preferred, mode_id_str))
-            print ("\t\tProperties:\n" + "\n".join (["\t\t\t" + name + ": "  + str (prop) for name, prop in info.props.items ()]))
+            acc += "\t\tModes[pref]: %s\n" % iterable_str (range (len (info.modes)), mode_id_preferred, mode_id_str)
+            acc += "\t\tProperties:\n"
+            for name, prop in info.props.items ():
+                acc += "\t\t\t%s: %s\n" % (name, str (prop))
