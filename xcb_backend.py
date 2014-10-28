@@ -34,8 +34,8 @@ class Backend (object):
         if self.update_callback: self.update_callback (self.to_concrete_layout ())
         return True # continue
 
-    def debug_dump (self):
-        print (dump_state (self))
+    def debug_info (self):
+        return dump_state (self)
 
     ###########################
     # ConfigManager Interface #
@@ -145,12 +145,18 @@ class Backend (object):
                 if not Transform.check_xcb_available_transform (c.rotations): raise RandrError ("output %s has not all required rotations available" % x_o.name)
                 l_o.enabled, l_o.base_size, l_o.position, l_o.transform = True, self.mode_size_by_id (c.mode), layout.Pair (c.x, c.y), Transform.xcb_to_slam (c.rotation)
             return (x_o.name, l_o)
-        connected_output_ids = [i for i in self.outputs if self.is_connected (i)]
         virtual_screen_size = layout.Pair (self.screen_setup.width_in_pixels, self.screen_setup.height_in_pixels)
-        concrete = layout.ConcreteLayout (dict ([make_entry (i) for i in connected_output_ids]), virtual_screen_size)
+        concrete = layout.ConcreteLayout (outputs = dict ([make_entry (i) for i in self.outputs if self.is_connected (i)]), vss = virtual_screen_size)
         concrete.compute_manual_flag (self.get_preferred_sizes_by_output ())
         return concrete
         
+    def test (self):
+        print "Move LVDS a bit down"
+        crtc = 63
+        d = self.crtcs[crtc]
+        print layout.class_str (d)
+        print layout.class_str (self.conn.randr.SetCrtcConfig (crtc, self.screen_res.timestamp, self.screen_res.config_timestamp, 0, 180, d.mode, d.rotation, d.num_outputs, d.outputs).reply ())
+        self.conn.flush ()
 
 ### EXPERIMENTAL
 #def move_down (self):
@@ -209,7 +215,6 @@ class Transform (object):
 class Properties:
     def __init__ (self, conn):
         self.conn = conn
-        
         # Get atoms of property names
         watched_properties = [ "EDID", "BACKLIGHT" ]
         self.atoms = dict ((name, self.conn.core.InternAtom (False, len (name), name).reply ().atom) for name in watched_properties)
@@ -226,16 +231,13 @@ class Properties:
         # Data : backlight value
         data = self.conn.randr.GetOutputProperty (output, prop_atom, xcb.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
         if Properties.not_found (data): return None
-
         if not (data.format > 0 and data.type == xcb.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items == 1): raise RandrError ("invalid BACKLIGHT value formatting")
         (value,) = struct.unpack_from ({ 8: "b", 16: "h", 32: "i" } [data.format], bytearray (data.data))
-        
         # Config : backlight value range
         config = self.conn.randr.QueryOutputProperty (output, prop_atom).reply ()
         if not (config.range and len (config.validValues) == 2): raise RandrError ("invalid BACKLIGHT config")
         lowest, highest = config.validValues
         if not (lowest <= value and value <= highest): raise RandrError ("BACKLIGHT value out of bounds")
-        
         return (value, lowest, highest)
 
     def get_edid (self, output, prop_atom):
@@ -296,3 +298,4 @@ def dump_state (state):
             acc += "\t\tProperties:\n"
             for name, prop in info.props.items ():
                 acc += "\t\t\t%s: %s\n" % (name, str (prop))
+    return acc

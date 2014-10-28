@@ -29,11 +29,13 @@ class Pair (object):
     def __neg__ (self): return Pair (-self.x, -self.y)
     def __sub__ (self, other): return self + (-other)
 
-    def __eq__ (self, other): return self.x == other.x and self.y == other.y
-    def __ne__ (self, other): return not (self == other)
-    def __str__ (self): return "(%s,%s)" % (str (self.x), str (self.y))
-    def __repr__ (self): return "(%s,%s)" % (repr (self.x), repr (self.y))
-    def __iter__ (self): return iter ((self.x, self.y))
+    def tuple (self): return (self.x, self.y)
+    def __eq__ (self, other): return self.tuple () == other.tuple ()
+    def __ne__ (self, other): return self.tuple () != other.tuple ()
+    def __str__ (self): return str (self.tuple ())
+    def __repr__ (self): return repr (self.tuple ())
+    def __iter__ (self): return iter (self.tuple ())
+    def __getitem__ (self, k): return self.tuple () [k]
 
 # Transformation
 class Transform (object):
@@ -41,6 +43,7 @@ class Transform (object):
     """
     Transformation is internally a reflection on x coordinates followed by a trigonometric rotation
     Externally, rotate(), reflectx/y() return a new transformation based on the current one
+    Not modifiable, only creates new instances
     """
     def __init__ (self, rx = False, rot = 0): self.reflect, self.rotation = rx, rot
     def copy (self): return Transform (self.reflect, self.rotation)
@@ -68,8 +71,10 @@ class AbstractLayout (object):
     Relations are duplicated (a < b && b > a)
     """
     class Output (object):
-        def __init__ (self, tr = Transform (), neighbours = {}): self.transform, self.neighbours = tr, neighbours
-        def copy (self): return Output (self.transform.copy (), self.neighbours.copy ())
+        def __init__ (self, **kwd):
+            self.transform = kwd.get ("transform", Transform ())
+            self.neighbours = kwd.get ("neighbours", {})
+        def copy (self): return Output (transform = self.transform.copy (), neighbours = self.neighbours.copy ())
 
         def rel (self, neighbour): return self.neighbours.get (neighbour, Dir.none)
 
@@ -78,12 +83,12 @@ class AbstractLayout (object):
         def load (data): return Output (Transform.load (data[0]), data[1])
         __str__ = class_str
 
-    def __init__ (self, outputs = {}): self.outputs = outputs
-    def copy (self): return AbstractLayout (dict ([(n, o.copy ()) for n, o in self.outputs.items ()])) # deep copy
+    def __init__ (self, **kwd): self.outputs = kwd.get ("outputs", {})
+    def copy (self): return AbstractLayout (outputs = dict ([(n, o.copy ()) for n, o in self.outputs.items ()])) # deep copy
 
     def dump (self): return dict ([(name, output.dump ()) for name, output in self.outputs.items ()])
     @staticmethod
-    def load (data): return AbstractLayout (dict ([(name, Output.load (d)) for name, d in data.items ()]))
+    def load (data): return AbstractLayout (outputs = dict ([(name, Output.load (d)) for name, d in data.items ()]))
     def __str__ (self): return "AbstractLayout{\n" + "".join (["\t%s => %s\n" % (n, str (o)) for n, o in self.outputs.items ()]) + "}"
 
 class Config (object):
@@ -110,8 +115,11 @@ class Manager (object):
         self.backend.attach (lambda t: self.backend_changed (t))
 
     def backend_changed (self, new_concrete_layout):
+        a = new_concrete_layout.to_abstract ()
+        c = ConcreteLayout.from_abstract (a, self.backend.get_virtual_screen_min_size (), self.backend.get_virtual_screen_max_size (), self.backend.get_preferred_sizes_by_output ())
         print str (new_concrete_layout)
-        print str (new_concrete_layout.to_abstract ())
+        print str (a)
+        print str (c)
 
     def dump (self):
         """ Output all stored layouts as a string (uses pickle) """
@@ -140,8 +148,9 @@ class ConcreteLayout (object):
         def size (self): return self.transform.rectangle_size (self.base_size)
         __str__ = class_str
 
-    def __init__ (self, outputs = {}, vss = Pair (0, 0)):
-        self.outputs, self.virtual_screen_size = outputs, vss
+    def __init__ (self, **kwd):
+        self.outputs = kwd.get ("outputs", {})
+        self.virtual_screen_size = kwd.get ("vss", Pair (0, 0))
         self.manual = False
 
     def key (self):
@@ -152,15 +161,17 @@ class ConcreteLayout (object):
         return "ConcreteLayout(vss=%s, manual=%d){\n%s}" % (self.virtual_screen_size, self.manual, "".join (outputs))
 
     def compute_manual_flag (self, preferred_sizes_by_output):
-        outputs = set (self.outputs.items ())
+        outputs = self.outputs.items ()
         self.manual = False
         for name, o in outputs:
             self.manual |= not o.enabled # disabled outputs
             self.manual |= preferred_sizes_by_output[name] != o.base_size # not preferred mode
             # overlap check
-            end_corner = o.position + o.size ()
-            for n2, o2 in outputs - set ([(name, o)]):
-                self.manual |= end_corner.x <= o2.position.x and end_corner.y <= o2.position.y
+            o_corner = o.position + o.size ()
+            for nt, ot in outputs:
+                if name < nt: # only check each screen pair once
+                    ot_corner = ot.position + ot.size ()
+                    self.manual |= not (ot.position.x >= o_corner.x or ot.position.y >= o_corner.y or o.position.x >= ot_corner.x or o.position.y >= ot_corner.y)
             # mirroring covered by the overlap check (mirrored outputs will overlap)
 
     # Import/export
@@ -170,7 +181,7 @@ class ConcreteLayout (object):
         Builds a new backend layout object from an abstract layout and external info
         Absolute layout positionning uses the c++ isl extension
         """
-        concrete = ConcreteLayout (dict ([(name, Output (enabled = True, transform = o.transform.copy (), base_size = preferred_sizes_by_output[name])) for name, o in abstract.outputs.items ()]))
+        concrete = ConcreteLayout (outputs = dict ([(name, ConcreteLayout.Output (enabled = True, transform = o.transform.copy (), base_size = preferred_sizes_by_output[name])) for name, o in abstract.outputs.items ()]))
         # Compute absolute layout
         names = abstract.outputs.keys ()
         constraints = [ [ abstract.outputs[na].rel (nb) for nb in names ] for na in names ]
@@ -178,7 +189,7 @@ class ConcreteLayout (object):
         if r == None: return None
         # Fill result
         concrete.virtual_screen_size = Pair (r[0])
-        for i, name in zip (range (len (names)), names): concrete.outputs[name].position = Pair (r[1][i])
+        for i, name in enumerate (names): concrete.outputs[name].position = Pair (r[1][i])
         return concrete
 
     def to_abstract (self):
@@ -186,13 +197,14 @@ class ConcreteLayout (object):
         Two screen are considered related if their borders are touching in the absolute layout
         """
         if self.manual: raise LayoutException ("cannot abstract ConcreteLayout in manual mode")
-        outputs = set (self.outputs.items ())
-        abstract = AbstractLayout (dict ([(name, AbstractLayout.Output (o.transform.copy ())) for name, o in outputs]))
+        outputs = self.outputs.items ()
+        abstract = AbstractLayout (outputs = dict ([(name, AbstractLayout.Output (transform = o.transform.copy ())) for name, o in outputs]))
         # Extract neighbouring relations
         for na, oa in outputs:
-            for nb, ob in outputs - set ([(na, oa)]):
-                oa_corner, ob_corner = oa.position + oa.size (), ob.position + ob.size ()
-                if oa_corner.x == ob.position.x and (oa.position.y < ob_corner.y or oa_corner.y > ob.position.y): abstract.outputs[na].neighbours[nb], abstract.outputs[nb].neighbours[na] = Dir.left, Dir.right
-                if oa_corner.y == ob.position.y and (oa.position.x < ob_corner.x or oa_corner.x > ob.position.x): abstract.outputs[na].neighbours[nb], abstract.outputs[nb].neighbours[na] = Dir.above, Dir.under
+            for nb, ob in outputs:
+                if na != nb:
+                    oa_corner, ob_corner = oa.position + oa.size (), ob.position + ob.size ()
+                    if oa_corner.x == ob.position.x and oa.position.y < ob_corner.y and oa_corner.y > ob.position.y: abstract.outputs[na].neighbours[nb], abstract.outputs[nb].neighbours[na] = Dir.left, Dir.right
+                    if oa_corner.y == ob.position.y and oa.position.x < ob_corner.x and oa_corner.x > ob.position.x: abstract.outputs[na].neighbours[nb], abstract.outputs[nb].neighbours[na] = Dir.above, Dir.under
         return abstract
 
