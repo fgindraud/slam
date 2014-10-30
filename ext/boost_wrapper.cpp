@@ -9,6 +9,7 @@ namespace screen_layout {
 	static py::tuple mk_py_tuple (const pair & p) { return py::make_tuple (p.x, p.y); }
 
 	const char * py_doc =
+		"Computes the optimal screen layout coordinates\n"
 		"Input {\n"
 		"   (w, h) : virtual screen maximum size\n"
 		"   [(w0, h0), ...] : screen sizes\n"

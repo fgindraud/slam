@@ -3,10 +3,10 @@ import pickle
 
 ### Utils ###
 
-class TransformException (Exception):
-    pass
-class LayoutException (Exception):
-    pass
+class TransformException (Exception): pass
+class LayoutException (Exception): pass
+class BackendError (Exception): pass
+class BackendFatalError (Exception): pass
 
 def class_str (instance):
     return type (instance).__name__ + "(" + ", ".join ([n + "=" + str (v) for n, v in instance.__dict__.items ()]) + ")"
@@ -84,12 +84,16 @@ class AbstractLayout (object):
         __str__ = class_str
 
     def __init__ (self, **kwd): self.outputs = kwd.get ("outputs", {})
-    def copy (self): return AbstractLayout (outputs = dict ([(n, o.copy ()) for n, o in self.outputs.items ()])) # deep copy
+    def copy (self): return AbstractLayout (outputs = dict ((n, o.copy ()) for n, o in self.outputs.items ())) # deep copy
 
-    def dump (self): return dict ([(name, output.dump ()) for name, output in self.outputs.items ()])
+    def set_relation (self, na, rel, nb):
+        self.outputs[na].neighbours[nb] = rel
+        self.outputs[nb].neighbours[na] = rel.invert ()
+
+    def dump (self): return dict ((name, output.dump ()) for name, output in self.outputs.items ())
     @staticmethod
-    def load (data): return AbstractLayout (outputs = dict ([(name, Output.load (d)) for name, d in data.items ()]))
-    def __str__ (self): return "AbstractLayout{\n" + "".join (["\t%s => %s\n" % (n, str (o)) for n, o in self.outputs.items ()]) + "}"
+    def load (data): return AbstractLayout (outputs = dict ((name, Output.load (d)) for name, d in data.items ()))
+    def __str__ (self): return "AbstractLayout{\n" + "".join ("\t%s => %s\n" % (n, str (o)) for n, o in self.outputs.items ()) + "}"
 
 class Config (object):
     """
@@ -116,10 +120,16 @@ class Manager (object):
 
     def backend_changed (self, new_concrete_layout):
         a = new_concrete_layout.to_abstract ()
-        c = ConcreteLayout.from_abstract (a, self.backend.get_virtual_screen_min_size (), self.backend.get_virtual_screen_max_size (), self.backend.get_preferred_sizes_by_output ())
         print str (new_concrete_layout)
-        print str (a)
-        print str (c)
+        print str (new_concrete_layout.to_abstract ())
+
+    def test (self, line):
+        rot = 0
+        for s, r in {"left": 90, "right": 270, "down": 180}.items ():
+            if s in line: rot = r
+        a = AbstractLayout (outputs = {"LVDS1": AbstractLayout.Output (transform = Transform ().rotate (rot))})
+        c = ConcreteLayout.from_abstract (a, self.backend.get_virtual_screen_min_size (), self.backend.get_virtual_screen_max_size (), self.backend.get_preferred_sizes_by_output ())
+        self.backend.use_concrete_layout (c)
 
     def dump (self):
         """ Output all stored layouts as a string (uses pickle) """
@@ -154,10 +164,10 @@ class ConcreteLayout (object):
         self.manual = False
 
     def key (self):
-        return frozenset ([(name, o.edid) for name, o in self.outputs.items ()])
+        return frozenset ((name, o.edid) for name, o in self.outputs.items ())
 
     def __str__ (self):
-        outputs = ["\t%s => %s\n" % (n, str (o)) for n, o in self.outputs.items ()]
+        outputs = ("\t%s => %s\n" % (n, str (o)) for n, o in self.outputs.items ())
         return "ConcreteLayout(vss=%s, manual=%d){\n%s}" % (self.virtual_screen_size, self.manual, "".join (outputs))
 
     def compute_manual_flag (self, preferred_sizes_by_output):
@@ -181,7 +191,7 @@ class ConcreteLayout (object):
         Builds a new backend layout object from an abstract layout and external info
         Absolute layout positionning uses the c++ isl extension
         """
-        concrete = ConcreteLayout (outputs = dict ([(name, ConcreteLayout.Output (enabled = True, transform = o.transform.copy (), base_size = preferred_sizes_by_output[name])) for name, o in abstract.outputs.items ()]))
+        concrete = ConcreteLayout (outputs = dict ((name, ConcreteLayout.Output (enabled = True, transform = o.transform.copy (), base_size = preferred_sizes_by_output[name])) for name, o in abstract.outputs.items ()))
         # Compute absolute layout
         names = abstract.outputs.keys ()
         constraints = [ [ abstract.outputs[na].rel (nb) for nb in names ] for na in names ]
@@ -198,13 +208,13 @@ class ConcreteLayout (object):
         """
         if self.manual: raise LayoutException ("cannot abstract ConcreteLayout in manual mode")
         outputs = self.outputs.items ()
-        abstract = AbstractLayout (outputs = dict ([(name, AbstractLayout.Output (transform = o.transform.copy ())) for name, o in outputs]))
+        abstract = AbstractLayout (outputs = dict ((name, AbstractLayout.Output (transform = o.transform.copy ())) for name, o in outputs))
         # Extract neighbouring relations
         for na, oa in outputs:
             for nb, ob in outputs:
                 if na != nb:
                     oa_corner, ob_corner = oa.position + oa.size (), ob.position + ob.size ()
-                    if oa_corner.x == ob.position.x and oa.position.y < ob_corner.y and oa_corner.y > ob.position.y: abstract.outputs[na].neighbours[nb], abstract.outputs[nb].neighbours[na] = Dir.left, Dir.right
-                    if oa_corner.y == ob.position.y and oa.position.x < ob_corner.x and oa_corner.x > ob.position.x: abstract.outputs[na].neighbours[nb], abstract.outputs[nb].neighbours[na] = Dir.above, Dir.under
+                    if oa_corner.x == ob.position.x and oa.position.y < ob_corner.y and oa_corner.y > ob.position.y: abstract.set_relation (na, Dir.left, nb)
+                    if oa_corner.y == ob.position.y and oa.position.x < ob_corner.x and oa_corner.x > ob.position.x: abstract.set_relation (na, Dir.above, nb)
         return abstract
 

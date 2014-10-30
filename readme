@@ -1,3 +1,8 @@
 SLAM - Screen Layout Automatic Manager
 
 python2 setup.py install
+
+Requires :
+- ISL library (usually shipped with gcc)
+- Boost::Python
+- Xpyb python Xcb binding

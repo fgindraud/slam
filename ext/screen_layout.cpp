@@ -36,7 +36,7 @@ namespace screen_layout {
 		 */
 		public:
 			rectangle_packer (int _nb_screen, const pair & vscreen_min_size, const pair & vscreen_max_size, const pair_list & screen_sizes, const sequence_pair & layout) : nb_screen (_nb_screen) {
-				init_solver (nb_screen);
+				init_solver ();
 
 				// Virtual screen boundaries
 				more_than_const (v_vscreen_size (X), vscreen_min_size.x); less_than_const (v_vscreen_size (X), vscreen_max_size.x);
@@ -135,7 +135,7 @@ namespace screen_layout {
 			inline int v_nb (void) const { return v_max_var (max_var_nb ()); }
 
 			// Init
-			void init_solver (int nb_screen) {
+			void init_solver (void) {
 				context = isl_ctx_alloc ();
 				isl_space * vars = isl_space_set_alloc (context, 0, v_nb ());
 				ls = isl_local_space_from_space (isl_space_copy (vars));

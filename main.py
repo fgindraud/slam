@@ -28,14 +28,14 @@ import xcb_backend
 # Commands
 class StdinCmd (object):
     """ Very simple command line testing tool """
-    def __init__ (self, backend):
-        self.backend = backend
+    def __init__ (self, backend, cm):
+        self.backend, self.cm = backend, cm
     def fileno (self): return sys.stdin.fileno ()
     def activate (self):
         """ Pick one line a time, and check for keywords """
         line = sys.stdin.readline ()
         if "backend" in line: print self.backend.debug_info ()
-        if "test" in line: self.backend.test ()
+        if "test" in line: self.cm.test (line)
         if "exit" in line: return False
         return True
 
@@ -56,7 +56,7 @@ def event_loop (object_list):
 if __name__ == "__main__":
     backend = xcb_backend.Backend ()
     config_manager = layout.Manager (backend)
-    cmd = StdinCmd (backend)
+    cmd = StdinCmd (backend, config_manager)
     try:
         event_loop ([backend, cmd])
     finally:
