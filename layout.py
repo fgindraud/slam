@@ -119,14 +119,15 @@ class Manager (object):
         self.backend.attach (lambda t: self.backend_changed (t))
 
     def backend_changed (self, new_concrete_layout):
-        a = new_concrete_layout.to_abstract ()
         print str (new_concrete_layout)
-        print str (new_concrete_layout.to_abstract ())
+        if not new_concrete_layout.manual: print str (new_concrete_layout.to_abstract ())
 
     def test (self, line):
         rot = 0
         for s, r in {"left": 90, "right": 270, "down": 180}.items ():
             if s in line: rot = r
+        #a = AbstractLayout (outputs = {"LVDS1": AbstractLayout.Output (), "VGA1": AbstractLayout.Output (transform = Transform ().rotate (rot))})
+        #a.set_relation ("LVDS1", Dir.left, "VGA1")
         a = AbstractLayout (outputs = {"LVDS1": AbstractLayout.Output (transform = Transform ().rotate (rot))})
         c = ConcreteLayout.from_abstract (a, self.backend.get_virtual_screen_min_size (), self.backend.get_virtual_screen_max_size (), self.backend.get_preferred_sizes_by_output ())
         self.backend.use_concrete_layout (c)
