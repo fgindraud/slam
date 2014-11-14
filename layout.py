@@ -1,3 +1,5 @@
+from util import *
+
 import slam_ext
 import pickle
 
@@ -8,34 +10,10 @@ class LayoutException (Exception): pass
 class BackendError (Exception): pass
 class BackendFatalError (Exception): pass
 
-def class_str (instance):
-    return type (instance).__name__ + "(" + ", ".join ([n + "=" + str (v) for n, v in instance.__dict__.items ()]) + ")"
-
 # Directions
 Dir = slam_ext.Dir
 Dir.invert = slam_ext.Dir_invert
 Dir.__str__ = slam_ext.Dir_str
-
-# Pair of objects
-class Pair (object):
-    def __init__ (self, a, b = None):
-        """ Takes a pair of values, or an iterable """
-        if b == None: self.x, self.y = a
-        else: self.x, self.y = a, b
-
-    def copy (self): return Pair (self)
-    def swap (self): return Pair (self.y, self.x)
-    def __add__ (self, other): return Pair (self.x + other.x, self.y + other.y)
-    def __neg__ (self): return Pair (-self.x, -self.y)
-    def __sub__ (self, other): return self + (-other)
-
-    def tuple (self): return (self.x, self.y)
-    def __eq__ (self, other): return self.tuple () == other.tuple ()
-    def __ne__ (self, other): return self.tuple () != other.tuple ()
-    def __str__ (self): return str (self.tuple ())
-    def __repr__ (self): return repr (self.tuple ())
-    def __iter__ (self): return iter (self.tuple ())
-    def __getitem__ (self, k): return self.tuple () [k]
 
 # Transformation
 class Transform (object):
@@ -197,8 +175,8 @@ class ConcreteLayout (object):
         names = abstract.outputs.keys ()
         constraints = [ [ abstract.outputs[na].rel (nb) for nb in names ] for na in names ]
         r = slam_ext.screen_layout (virtual_screen_min, virtual_screen_max, [concrete.outputs[n].size () for n in names], constraints)
-        if r == None: return None
         # Fill result
+        if r == None: return None
         concrete.virtual_screen_size = Pair (r[0])
         for i, name in enumerate (names): concrete.outputs[name].position = Pair (r[1][i])
         return concrete
