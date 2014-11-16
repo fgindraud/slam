@@ -20,13 +20,14 @@ Wanted features:
 * Config: set_of_edid + set_of_flags (train, work, ...)
 '''
 
-import sys, os, select
+import sys
 
 import layout
 import xcb_backend
+from util import *
 
 # Commands
-class StdinCmd (object):
+class StdinCmd (Daemon):
     """ Very simple command line testing tool """
     def __init__ (self, backend, cm):
         self.backend, self.cm = backend, cm
@@ -39,26 +40,10 @@ class StdinCmd (object):
         if "exit" in line: return False
         return True
 
-# Main event loop
-def event_loop (object_list):
-    """
-    Use select to wait for objects representing FD ressources.
-    Requires for each object:
-        int fileno () method
-        bool activate () method : returning False stops the loop
-    """
-    while True:
-        activated, _, _ = select.select (object_list, [], [])
-        for obj in activated:
-            if not obj.activate (): return
-
 # Entry point
 if __name__ == "__main__":
-    backend = xcb_backend.Backend ()
-    config_manager = layout.Manager (backend)
-    cmd = StdinCmd (backend, config_manager)
-    try:
-        event_loop ([backend, cmd])
-    finally:
-        backend.cleanup ()
-    sys.exit (0)
+    with xcb_backend.Backend () as backend:
+        config_manager = layout.Manager (backend)
+        cmd = StdinCmd (backend, config_manager)
+        Daemon.event_loop (backend, cmd)
+        sys.exit (0)

@@ -108,7 +108,7 @@ class Manager (object):
         #a.set_relation ("LVDS1", Dir.left, "VGA1")
         a = AbstractLayout (outputs = {"LVDS1": AbstractLayout.Output (transform = Transform ().rotate (rot))})
         c = ConcreteLayout.from_abstract (a, self.backend.get_virtual_screen_min_size (), self.backend.get_virtual_screen_max_size (), self.backend.get_preferred_sizes_by_output ())
-        self.backend.use_concrete_layout (c)
+        self.backend.apply_concrete_layout (c)
 
     def dump (self):
         """ Output all stored layouts as a string (uses pickle) """

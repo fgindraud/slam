@@ -6,14 +6,13 @@ XCB interface part of the multi monitor daemon.
 """
 
 import struct
-from functools import reduce
 import xcffib, xcffib.xproto, xcffib.randr
 
 from util import *
 import layout
 from layout import BackendError, BackendFatalError
 
-class Backend (object):
+class Backend (Daemon):
     ##################
     # Main Interface #
     #################
@@ -29,17 +28,15 @@ class Backend (object):
 
         self.update_callback = lambda _: 0
         self.init_randr_connection (**kwd)
-    def cleanup (self):
-        self.conn.disconnect ()
 
-    def fileno (self): return self.conn.get_file_descriptor ()
+    def __enter__ (self): return self
+    def __exit__ (self, type, value, tb): self.conn.disconnect ()
+    
+    def fileno (self):
+        return self.conn.get_file_descriptor ()
 
     def activate (self):
-        turns = 0
         while self.flush_notify ():
-            turns += 1
-            if turns > 10:
-                raise BackendFatalError ("activation infinite loop")
             self.reload_state ()
             self.update_callback (self.to_concrete_layout ())
         return True # continue
@@ -82,16 +79,16 @@ class Backend (object):
     def get_preferred_sizes_by_output (self):
         """ Returns the best size for each output (biggest and fastest) """
         def find_best (o_data):
-            return max (self.mode_by_id (m_id) for m_id in self.preferred_mode_ids (o_data)) [0]
+            return max (map (self.mode_by_id, self.preferred_mode_ids (o_data))) [0]
         return dict ((o.name, find_best (o)) for o in self.outputs.values () if len (o.modes) > 0)
 
     def attach (self, callback):
         self.update_callback = callback
         callback (self.to_concrete_layout ()) # initial call to let the manager update itself
 
-    def use_concrete_layout (self, concrete):
-        # TODO reactivate
-        self.apply_concrete_layout (concrete)
+    def apply_concrete_layout (self, concrete):
+        self._apply_concrete_layout (concrete)
+        self.activate_manually () # Handle our own notifications
 
     ####################
     # XRandR internals #
@@ -173,7 +170,7 @@ class Backend (object):
         concrete.compute_manual_flag (self.get_preferred_sizes_by_output ())
         return concrete
    
-    def apply_concrete_layout (self, concrete):
+    def _apply_concrete_layout (self, concrete):
         ### Allocate Crtcs ###
         output_id_by_name = dict ((self.outputs[o].name, o) for o in self.outputs)
         new_output_by_crtc = dict.fromkeys (self.crtcs)
@@ -312,7 +309,7 @@ class XcbTransform (object):
 
     def to_slam (self):
         try: [rot] = (r for r, m in XcbTransform.slam_to_mask.items () if m & self.mask)
-        except: raise BackendFatalError ("xcffib transformation has 0 or >1 rotation flags")
+        except ValueError: raise BackendFatalError ("xcffib transformation has 0 or >1 rotation flags")
         slam = layout.Transform ()
         if self.mask & xcffib.randr.Rotation.Reflect_X: slam = slam.reflectx ()
         if self.mask & xcffib.randr.Rotation.Reflect_Y: slam = slam.reflecty ()

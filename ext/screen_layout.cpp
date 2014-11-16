@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <limits>
 #include <isl/set.h>
 
 namespace screen_layout {
@@ -214,8 +215,8 @@ namespace screen_layout {
 
 	bool compute_screen_layout (const pair & vscreen_min_size, const pair & vscreen_max_size, const pair_list & screen_sizes, const setting & user_constraints, pair & vscreen_size, pair_list & screen_positions) {
 		int nb_screen = screen_sizes.size ();
-		bool found = false;
-		long last_objective;
+		const long init = std::numeric_limits< long >::max ();
+		long last_objective = init;
 
 		// Iterate over layout templates
 		sequence_pair seq_pair (nb_screen);
@@ -234,8 +235,7 @@ namespace screen_layout {
 					pair virtual_screen_size = packer.virtual_screen ();
 
 					// Record solution only if better objective (and smaller)
-					if (not found || objective < last_objective || (objective == last_objective && virtual_screen_size < vscreen_size)) {
-						found = true;
+					if (objective < last_objective || (objective == last_objective && virtual_screen_size < vscreen_size)) {
 						last_objective = objective;
 						vscreen_size = virtual_screen_size;
 						screen_positions = packer.screen_positions ();
@@ -243,7 +243,7 @@ namespace screen_layout {
 				}
 			}
 		} while (seq_pair.next ());
-		return found;
+		return last_objective != init;
 	}
 
 }

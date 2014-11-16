@@ -1,5 +1,9 @@
 import operator
-import collections
+import select
+from functools import reduce
+from itertools import *
+
+# Pair
 
 class Pair (tuple):
     """ Utility type for a pair of values """
@@ -37,17 +41,63 @@ class Pair (tuple):
         elif spec == "p": return "{}mm x {}mm".format (self.x, self.y)
         else: return str (self)
 
+# Daemon
+
+class DaemonLoopException (Exception):
+    pass
+
+class Daemon (object):
+    """
+    Daemon objects that listen to file descriptors and can be activated when new data is available
+    A daemon can ask to be reactivated immediately even if no new data is available.
+    A counter ensure that reactivations does not loop undefinitely.
+    Must be implemented for each subclass :
+        int fileno () : returns file descriptor
+        bool activate () : do stuff, and returns False to stop the event loop
+    """
+    def activate_manually (self):
+        self._flag_to_be_activated = True
+
+    def _to_be_activated (self):
+        try: return self._flag_to_be_activated
+        except AttributeError: return False
+
+    def _reset_activation_counter (self): self._activation_counter = 0
+    def _activate (self):
+        try:
+            self._activation_counter += 1
+            if self._activation_counter > 10:
+                raise DaemonLoopException
+        except AttributeError: pass # ignore activation counter if not in loop
+        return self.activate ()
+
+    @staticmethod
+    def event_loop (*daemons):
+        while True:
+            # Activate selected deamons
+            map (Daemon._reset_activation_counter, daemons)
+            while any (map (Daemon._to_be_activated, daemons)):
+                d = next (filter (Daemon._to_be_activated, daemons))
+                d._flag_to_be_activated = False
+                if d._activate () == False: return
+            # Detect fileno-activated deamons
+            new_data, _, _ = select.select (daemons, [], [])
+            for d in new_data:
+                d._flag_to_be_activated = True
+
 # Class introspection and pretty print
 
 def class_attributes (cls):
     """ Return all class attributes (usually class constants) """
-    return [attr for attr in dir (cls) if not isinstance (attr, collections.Callable) and not attr.startswith ("__")]
-
-def class_str (instance):
-    return type (instance).__name__ + "(" + ", ".join ([n + "=" + str (v) for n, v in instance.__dict__.items ()]) + ")"
+    return [attr for attr in dir (cls) if not callable (attr) and not attr.startswith ("__")]
 
 def sequence_stringify (iterable, highlight = lambda t: False, stringify = str):
     """ Print and join all elements of <iterable>, highlighting those matched by <highlight> """
     def formatting (data):
         return ("[{}]" if highlight (data) else "{}").format (stringify (data))
-    return " ".join (formatting (text) for text in iterable)
+    return " ".join (map (formatting, iterable))
+
+
+def class_str (instance):
+    return type (instance).__name__ + "(" + ", ".join (map (lambda i: i[0] + "=" + str (i[1]), instance.__dict__.items ())) + ")"
+
