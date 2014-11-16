@@ -183,7 +183,7 @@ namespace screen_layout {
 			}
 			void equality (const std::vector< int > & coeffs) {
 				isl_constraint * equ = isl_equality_alloc (isl_local_space_copy (ls));
-				for (int c = 0; c < coeffs.size (); ++c)
+				for (unsigned c = 0; c < coeffs.size (); ++c)
 					equ = isl_constraint_set_coefficient_si (equ, isl_dim_set, c, coeffs[c]);
 				solutions = isl_set_add_constraint (solutions, equ);
 			}

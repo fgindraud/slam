@@ -1,4 +1,5 @@
 import operator
+import collections
 
 class Pair (tuple):
     """ Utility type for a pair of values """
@@ -40,7 +41,7 @@ class Pair (tuple):
 
 def class_attributes (cls):
     """ Return all class attributes (usually class constants) """
-    return [attr for attr in dir (cls) if not callable (attr) and not attr.startswith ("__")]
+    return [attr for attr in dir (cls) if not isinstance (attr, collections.Callable) and not attr.startswith ("__")]
 
 def class_str (instance):
     return type (instance).__name__ + "(" + ", ".join ([n + "=" + str (v) for n, v in instance.__dict__.items ()]) + ")"

@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 '''
 Daemon to manage multi monitors
 
@@ -34,9 +34,8 @@ class StdinCmd (object):
     def activate (self):
         """ Pick one line a time, and check for keywords """
         line = sys.stdin.readline ()
-        if "backend" in line: print self.backend.dump ()
+        if "backend" in line: print (self.backend.dump ())
         if "test" in line: self.cm.test (line)
-        if "flush" in line: self.backend.flush ()
         if "exit" in line: return False
         return True
 

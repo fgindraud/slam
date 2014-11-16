@@ -6,23 +6,12 @@ XCB interface part of the multi monitor daemon.
 """
 
 import struct
-import xcb, xcb.xproto, xcb.randr
+from functools import reduce
+import xcffib, xcffib.xproto, xcffib.randr
 
 from util import *
 import layout
-from layout import BackendError as RandrError, BackendFatalError as RandrFatalError
-
-# Patch GetScreenInfo that fails due to no rates being returned by the server
-def get_screen_info_reply_init_patched (self, parent, offset=0):
-    xcb.Reply.__init__(self, parent, offset)
-    (self.rotations, self.root, self.timestamp, self.config_timestamp, self.nSizes, self.sizeID, self.rotation, self.rate, self.nInfo,) = struct.unpack_from('xB2x4xIIIHHHHH2x', parent, offset)
-    offset += 32
-    self.sizes = xcb.List(parent, offset, self.nSizes, xcb.randr.ScreenSize, 8)
-    #offset += len(self.sizes.buf())
-    #offset += xcb.type_pad(4, offset)
-    #self.rates = xcb.List(parent, offset, (self.nInfo - self.nSizes), RefreshRates, -1)
-xcb.randr.GetScreenInfoReply.__init__ = get_screen_info_reply_init_patched
-
+from layout import BackendError, BackendFatalError
 
 class Backend (object):
     ##################
@@ -37,22 +26,27 @@ class Backend (object):
         """
         self.dpi = kwd.get ("dpi", None)
         self.debug_enabled = kwd.get ("debug", True)
+
+        self.update_callback = lambda _: 0
         self.init_randr_connection (**kwd)
-        self.update_callback = None
     def cleanup (self):
         self.conn.disconnect ()
 
     def fileno (self): return self.conn.get_file_descriptor ()
 
     def activate (self):
-        if self.handle_messages ():
+        turns = 0
+        while self.flush_notify ():
+            turns += 1
+            if turns > 10:
+                raise BackendFatalError ("activation infinite loop")
             self.reload_state ()
-            if self.update_callback: self.update_callback (self.to_concrete_layout ())
+            self.update_callback (self.to_concrete_layout ())
         return True # continue
 
     def dump (self):
+        """ Returns internal state debug info as a string """
         acc = "Screen: {:s}\n".format (self.screen_size)
-        acc += "Rotation: {}\n".format (self.screen_transform)
         acc += "Modes\n"
         for mode in self.screen_res.modes:
             acc += "\t{0}\t{1[0]:s}  {1[1]}Hz\n".format (mode.id, mode_info (mode))
@@ -66,7 +60,7 @@ class Backend (object):
         acc += "Outputs\n"
         for o in self.screen_res.outputs:
             info = self.outputs[o]
-            if info.connection == xcb.randr.Connection.Connected:
+            if info.connection == xcffib.randr.Connection.Connected:
                 acc += "\t{}\t{}\tConnected\n".format (o, info.name)
                 acc += "\t|\tSize: {:p}\n".format (Pair.from_size (info, "mm_{}"))
                 acc += "\t|\tCrtcs[active]: {}\n".format (sequence_stringify (info.crtcs, highlight = lambda c: c == info.crtc))
@@ -78,7 +72,7 @@ class Backend (object):
             else:
                 acc += "\t{}\t{}\tDisconnected\n".format (o, info.name)
         return acc
-
+    
     ###########################
     # ConfigManager Interface #
     ###########################
@@ -96,11 +90,8 @@ class Backend (object):
         callback (self.to_concrete_layout ()) # initial call to let the manager update itself
 
     def use_concrete_layout (self, concrete):
+        # TODO reactivate
         self.apply_concrete_layout (concrete)
-
-    def flush (self):
-        if self.handle_messages ():
-            self.reload_state ()
 
     ####################
     # XRandR internals #
@@ -111,25 +102,25 @@ class Backend (object):
     def init_randr_connection (self, **kwd):
         """ Starts connection, construct an initial state, setup events. """
         # Connection
-        self.conn = xcb.connect (display = kwd.get ("display"))
+        self.conn = xcffib.connect (display = kwd.get ("display"))
         
         # Randr init
-        self.conn.randr = self.conn (xcb.randr.key)
+        self.conn.randr = self.conn (xcffib.randr.key)
         version = Pair.from_struct (self.conn.randr.QueryVersion (*Backend.randr_version).reply (), "major_version", "minor_version")
         if (not version >= Backend.randr_version):
-            raise RandrFatalError ("version: requested >= {}, got {}".format (Client.randr_version, version))
+            raise BackendFatalError ("version: requested >= {}, got {}".format (Client.randr_version, version))
 
         # Properties query object
-        self.prop_manager = Properties (self.conn)
+        self.prop_manager = Properties (self.conn) # TODO
 
         # Internal state 
-        screen_setup = self.conn.get_setup ().roots[kwd.get ("screen", self.conn.pref_screen)]
+        screen_setup = self.conn.setup.roots[kwd.get ("screen", self.conn.pref_screen)]
         self.root = screen_setup.root
         self.reload_state ()
 
         # Randr register for events
-        masks = xcb.randr.NotifyMask.ScreenChange | xcb.randr.NotifyMask.CrtcChange
-        masks |= xcb.randr.NotifyMask.OutputChange | xcb.randr.NotifyMask.OutputProperty
+        masks = xcffib.randr.NotifyMask.ScreenChange | xcffib.randr.NotifyMask.CrtcChange
+        masks |= xcffib.randr.NotifyMask.OutputChange | xcffib.randr.NotifyMask.OutputProperty
         self.conn.randr.SelectInput (self.root, masks)
         self.conn.flush ()
 
@@ -141,11 +132,9 @@ class Backend (object):
         # Screen ressources and size range
         cookie_res = self.conn.randr.GetScreenResourcesCurrent (self.root)
         cookie_size_range = self.conn.randr.GetScreenSizeRange (self.root)
-        cookie_rot = self.conn.randr.GetScreenInfo (self.root)
         cookie_size = self.conn.core.GetGeometry (self.root)
         self.screen_res = cookie_res.reply ()
         self.screen_limits = cookie_size_range.reply ()
-        self.screen_transform = XcbTransform.from_xcb_struct (cookie_rot.reply ())
         self.screen_size = Pair.from_size (cookie_size.reply ())
         # Crtc and Outputs
         crtc_req, output_req = {}, {}
@@ -153,24 +142,24 @@ class Backend (object):
         for o in self.screen_res.outputs: output_req[o] = self.conn.randr.GetOutputInfo (o, self.screen_res.config_timestamp)
         for c in self.screen_res.crtcs:
             self.crtcs[c] = check_reply (crtc_req[c].reply ())
-            self.crtcs[c].transform = XcbTransform.from_xcb_struct (self.crtcs[c])
+            self.crtcs[c].transform = XcbTransform.from_xcffib_struct (self.crtcs[c])
         for o in self.screen_res.outputs:
             self.outputs[o] = check_reply (output_req[o].reply ())
-            self.outputs[o].name = str (bytearray (self.outputs[o].name))
+            self.outputs[o].name = bytearray (self.outputs[o].name).decode ()
             if self.is_connected (o): self.outputs[o].props = self.prop_manager.get_properties (o)
 
-    def handle_messages (self):
-        ev = self.conn.poll_for_event ()
+    def flush_notify (self):
+        ev = hadevent = self.conn.poll_for_event ()
         while ev:
-            if isinstance (ev, xcb.randr.ScreenChangeNotifyEvent):
+            if isinstance (ev, xcffib.randr.ScreenChangeNotifyEvent):
                 self.debug ("[notify] ScreenChange = {:s}, {:p} | {}".format (Pair.from_size (ev), Pair.from_size (ev, "m{}"), XcbTransform (ev.rotation)))
-            if isinstance (ev, xcb.randr.NotifyEvent):
-                if ev.subCode == xcb.randr.Notify.CrtcChange:
+            if isinstance (ev, xcffib.randr.NotifyEvent):
+                if ev.subCode == xcffib.randr.Notify.CrtcChange:
                     self.debug ("[notify] CrtcChange[{}] = {:s}+{:s} | {}".format (ev.u.cc.crtc, Pair.from_size (ev.u.cc), Pair.from_struct (ev.u.cc), XcbTransform (ev.u.cc.rotation)))
-                if ev.subCode == xcb.randr.Notify.OutputChange: self.debug ("[notify] OutputChange[{}] = crtc[{}]".format (ev.u.oc.output, ev.u.oc.crtc))
-                if ev.subCode == xcb.randr.Notify.OutputProperty: self.debug ("[notify] OutputProperty[{}]".format (ev.u.op.output))
+                if ev.subCode == xcffib.randr.Notify.OutputChange: self.debug ("[notify] OutputChange[{}] = crtc[{}]".format (ev.u.oc.output, ev.u.oc.crtc))
+                if ev.subCode == xcffib.randr.Notify.OutputProperty: self.debug ("[notify] OutputProperty[{}]".format (ev.u.op.output))
             ev = self.conn.poll_for_event ()
-        return True
+        return hadevent != None
 
     def to_concrete_layout (self):
         def make_entry (o_id):
@@ -204,7 +193,7 @@ class Backend (object):
                 for c_id in self.crtcs:
                     try_allocate_crtc (c_id, o_name)
         if len (unallocated) > 0:
-            raise RandrError ("crtc allocation (tmp = {}) failed for outputs {}".format (new_output_by_crtc, list (unallocated)))
+            raise BackendError ("crtc allocation (tmp = {}) failed for outputs {}".format (new_output_by_crtc, list (unallocated)))
 
         ### Apply config ###
         timestamp = self.screen_res.timestamp
@@ -233,7 +222,7 @@ class Backend (object):
         
         def set_crtc (t, c_id, pos, mode, tr, outputs):
             self.debug ("[send] SetCrtcConfig[{}] = {} | {}".format (c_id, outputs, tr))
-            return check_reply (self.conn.randr.SetCrtcConfig (c_id, t, c_timestamp, pos.x, pos.y, mode, tr.mask, len (outputs), outputs).reply ()).timestamp
+            return check_reply (self.conn.randr.SetCrtcConfig (c_id, t, c_timestamp, pos.x, pos.y, mode, tr.mask, outputs).reply ()).timestamp
         def disable_crtc (t, c_id):
             return set_crtc (timestamp, c_id, Pair (0, 0), 0, XcbTransform (), [])
         def assign_crtc (t, c_id, o_name):
@@ -271,11 +260,11 @@ class Backend (object):
             print (msg)
 
     def is_connected (self, o_id):
-        return self.outputs[o_id].connection == xcb.randr.Connection.Connected
+        return self.outputs[o_id].connection == xcffib.randr.Connection.Connected
     
     def mode_by_id (self, m_id):
-        try: return mode_info ((m for m in self.screen_res.modes if m.id == m_id).next ())
-        except: raise RandrFatalError ("mode {} not found".format (m_id))
+        try: return mode_info (next (m for m in self.screen_res.modes if m.id == m_id))
+        except: raise BackendFatalError ("mode {} not found".format (m_id))
     def mode_exists (self, m_id):
         return len ([m for m in self.screen_res.modes if m.id == m_id]) == 1
     def preferred_mode_ids (self, o_data):
@@ -286,8 +275,8 @@ class Backend (object):
         for m_id in self.preferred_mode_ids (self.outputs[o_id]):
             (sz, f) = self.mode_by_id (m_id)
             if sz == size and f > freq:
-                mode, freq = m_id, freq
-        if mode == 0: raise RandrFatalError ("no matching mode for size {} and output {}".format (size, self.outputs[o_id].name))
+                mode, freq = m_id, f
+        if mode == 0: raise BackendFatalError ("no matching mode for size {} and output {}".format (size, self.outputs[o_id].name))
         return mode
 
 
@@ -296,37 +285,37 @@ def mode_info (mode):
     return (Pair.from_size (mode), freq)
 
 def check_reply (reply):
-    e = xcb.randr.SetConfig
+    e = xcffib.randr.SetConfig
     if reply.status == e.Success: return reply
-    elif reply.status == e.InvalidConfigTime: raise RandrError ("invalid config timestamp")
-    elif reply.status == e.InvalidTime: raise RandrError ("invalid timestamp")
-    else: raise RandrFatalError ("Request failed")
+    elif reply.status == e.InvalidConfigTime: raise BackendError ("invalid config timestamp")
+    elif reply.status == e.InvalidTime: raise BackendError ("invalid timestamp")
+    else: raise BackendFatalError ("Request failed")
 
 class XcbTransform (object):
     """
-    Xcb : reflections (xy), then trigo rotation : (rx, ry, rot), as a bitmask (xcb.randr.Rotation)
+    Xcb : reflections (xy), then trigo rotation : (rx, ry, rot), as a bitmask (xcffib.randr.Rotation)
     Slam : reflect x, then trigo rotation : (rx, rot)
     """
-    flags = dict ((a, getattr (xcb.randr.Rotation, a)) for a in class_attributes (xcb.randr.Rotation))
+    flags = dict ((a, getattr (xcffib.randr.Rotation, a)) for a in class_attributes (xcffib.randr.Rotation))
     all_flags_or = reduce (operator.__or__, flags.values ())
-    slam_to_mask = dict ((r, getattr (xcb.randr.Rotation, "Rotate_" + str (r))) for r in layout.Transform.rotations)
+    slam_to_mask = dict ((r, getattr (xcffib.randr.Rotation, "Rotate_" + str (r))) for r in layout.Transform.rotations)
 
-    def __init__ (self, mask = xcb.randr.Rotation.Rotate_0, allowed_masks = all_flags_or):
+    def __init__ (self, mask = xcffib.randr.Rotation.Rotate_0, allowed_masks = all_flags_or):
         self.mask = mask
         self.allowed_masks = allowed_masks
     @staticmethod
-    def from_xcb_struct (st):
+    def from_xcffib_struct (st):
         return XcbTransform (st.rotation, st.rotations)
     @staticmethod
     def from_slam (slam, allowed_masks = all_flags_or):
-        return XcbTransform (XcbTransform.slam_to_mask[slam.rotation] | (xcb.randr.Rotation.Reflect_X if slam.reflect else 0), allowed_masks)
+        return XcbTransform (XcbTransform.slam_to_mask[slam.rotation] | (xcffib.randr.Rotation.Reflect_X if slam.reflect else 0), allowed_masks)
 
     def to_slam (self):
         try: [rot] = (r for r, m in XcbTransform.slam_to_mask.items () if m & self.mask)
-        except: raise RandrFatalError ("xcb transformation has 0 or >1 rotation flags")
+        except: raise BackendFatalError ("xcffib transformation has 0 or >1 rotation flags")
         slam = layout.Transform ()
-        if self.mask & xcb.randr.Rotation.Reflect_X: slam = slam.reflectx ()
-        if self.mask & xcb.randr.Rotation.Reflect_Y: slam = slam.reflecty ()
+        if self.mask & xcffib.randr.Rotation.Reflect_X: slam = slam.reflectx ()
+        if self.mask & xcffib.randr.Rotation.Reflect_Y: slam = slam.reflecty ()
         return slam.rotate (rot)
 
     def valid (self):
@@ -350,22 +339,22 @@ class Properties:
     def get_properties (self, output): return dict ((name, getattr (self, "get_" + name.lower ()) (output, atom)) for name, atom in self.atoms.items ())
 
     @staticmethod
-    def not_found (reply): return reply.format == 0 and reply.type == xcb.xproto.Atom._None and reply.bytes_after == 0 and reply.num_items == 0
+    def not_found (reply): return reply.format == 0 and reply.type == xcffib.xproto.Atom._None and reply.bytes_after == 0 and reply.num_items == 0
 
     def get_backlight (self, output, prop_atom):
         """
         Backlight Xcb property (value, lowest, highest)
         """
         # Data : backlight value
-        data = self.conn.randr.GetOutputProperty (output, prop_atom, xcb.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
+        data = self.conn.randr.GetOutputProperty (output, prop_atom, xcffib.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
         if Properties.not_found (data): return None
-        if not (data.format > 0 and data.type == xcb.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items == 1): raise RandrFatalError ("invalid BACKLIGHT value formatting")
+        if not (data.format > 0 and data.type == xcffib.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items == 1): raise BackendFatalError ("invalid BACKLIGHT value formatting")
         (value,) = struct.unpack_from ({ 8: "b", 16: "h", 32: "i" } [data.format], bytearray (data.data))
         # Config : backlight value range
         config = self.conn.randr.QueryOutputProperty (output, prop_atom).reply ()
-        if not (config.range and len (config.validValues) == 2): raise RandrFatalError ("invalid BACKLIGHT config")
+        if not (config.range and len (config.validValues) == 2): raise BackendFatalError ("invalid BACKLIGHT config")
         lowest, highest = config.validValues
-        if not (lowest <= value and value <= highest): raise RandrFatalError ("BACKLIGHT value out of bounds")
+        if not (lowest <= value and value <= highest): raise BackendFatalError ("BACKLIGHT value out of bounds")
         return (value, lowest, highest)
 
     def get_edid (self, output, prop_atom):
@@ -373,7 +362,7 @@ class Properties:
         EDID (unique device identifier) Xcb property (str)
         """
         # Data
-        data = self.conn.randr.GetOutputProperty (output, prop_atom, xcb.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
-        if Properties.not_found (data): raise RandrError ("EDID property not found")
-        if not (data.format == 8 and data.type == xcb.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items > 0): raise RandrFatalError ("invalid EDID value formatting")
+        data = self.conn.randr.GetOutputProperty (output, prop_atom, xcffib.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
+        if Properties.not_found (data): raise BackendError ("EDID property not found")
+        if not (data.format == 8 and data.type == xcffib.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items > 0): raise BackendFatalError ("invalid EDID value formatting")
         return ''.join ("{:x}".format (b) for b in data.data)

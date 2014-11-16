@@ -97,8 +97,8 @@ class Manager (object):
         self.backend.attach (lambda t: self.backend_changed (t))
 
     def backend_changed (self, new_concrete_layout):
-        print str (new_concrete_layout)
-        if not new_concrete_layout.manual: print str (new_concrete_layout.to_abstract ())
+        print (str (new_concrete_layout))
+        if not new_concrete_layout.manual: print (str (new_concrete_layout.to_abstract ()))
 
     def test (self, line):
         rot = 0
