@@ -169,8 +169,11 @@ class Manager (object):
         """ Key for the manager map """
         return frozenset ((name, o.edid) for name, o in output_dict.items ())
 
+    # Init
+    
     def __init__ (self):
         self.layouts = dict () # frozenset( (name,edid=null) ) -> AbstractLayout ()
+        logger.info ("Manager created (empty)")
     
     @staticmethod
     def load (data):
@@ -187,13 +190,52 @@ class Manager (object):
         self.backend = backend
         self.backend.attach (lambda t: self.backend_changed (t))
 
+    # Callback
+
     def backend_changed (self, new_concrete_layout):
+        logger.info ("backend state changed")
+        logger.debug (str (new_concrete_layout))
 
+        if new_concrete_layout == self.current_concrete_layout:
+            # We are being notified of our last update to X
+            logger.info ("do nothing")
+            return
 
-        print (str (new_concrete_layout))
-        if not new_concrete_layout.manual: print (str (new_concrete_layout.to_abstract ()))
+        new_key = new_concrete_layout.key ()
+        if new_key != self.current_concrete_layout.key ():
+            # New output set, apply a layout
+            if new_key in self.layouts:
+                # Old layout found
+                logger.info ("apply from table")
+                self.apply_abstract_layout (self.layouts[new_key])
+            else:
+                # Use a default config
+                logger.info ("appy default config")
+                abstract = self.generate_default_layout (new_key)
+                self.layouts[new_key] = abstract
+                self.apply_abstract_layout (abstract)
+        else:
+            # Same output set
+            if new_concrete_layout.manual:
+                # Manual mode
+                logger.warn ("manual mode, do nothing")
+            else:
+                # New layout, store and normalize
+                logger.info ("store and normalize")
+                abstract = new_concrete_layout.to_abstract ()
+                self.layouts[new_key] = abstract
+                self.apply_abstract_layout (abstract)
+    
+    def apply_abstract_layout (self, abstract):
+        self.current_concrete_layout = ConcreteLayout.from_abstract (abstract,
+                self.backend.get_virtual_screen_min_size (), self.backend.get_virtual_screen_max_size (),
+                self.backend.get_preferred_sizes_by_output ())
+        self.backend.apply_concrete_layout (self.current_concrete_layout)
 
-        self.current_concrete_layout = new_concrete_layout
+    def generate_default_layout (self, key):
+        # For now, generate one without any relation.
+        #TODO : take stats over all configs to find relations
+        return AbstractLayout (outputs = dict ((name, AbstractLayout.Output (edid = edid)) for name, edid in key))
 
     def test (self, line):
         rot = 0
@@ -202,6 +244,5 @@ class Manager (object):
         #a = AbstractLayout (outputs = {"LVDS1": AbstractLayout.Output (), "VGA1": AbstractLayout.Output (transform = Transform ().rotate (rot))})
         #a.set_relation ("LVDS1", Dir.left, "VGA1")
         a = AbstractLayout (outputs = {"LVDS1": AbstractLayout.Output (transform = Transform ().rotate (rot), edid = self.current_concrete_layout.outputs["LVDS1"].edid)})
-        c = ConcreteLayout.from_abstract (a, self.backend.get_virtual_screen_min_size (), self.backend.get_virtual_screen_max_size (), self.backend.get_preferred_sizes_by_output ())
-        self.backend.apply_concrete_layout (c)
+        self.apply_abstract_layout (a)
 
