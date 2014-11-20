@@ -16,18 +16,16 @@ Wanted features:
     * Dbus calls to increase/decrease backlight
     * Dbus calls to set again hardware values to soft ones (and call that from ACPI handler after lid button or power cord change, because this is sometimes messed up)
 * Background image management based on config
-
-* Config: set_of_edid + set_of_flags (train, work, ...)
 '''
 
 import sys
 
 import layout
 import xcb_backend
-from util import *
+import util
 
 # Commands
-class StdinCmd (Daemon):
+class StdinCmd (util.Daemon):
     """ Very simple command line testing tool """
     def __init__ (self, backend, cm):
         self.backend, self.cm = backend, cm
@@ -42,8 +40,10 @@ class StdinCmd (Daemon):
 
 # Entry point
 if __name__ == "__main__":
-    with xcb_backend.Backend () as backend:
-        config_manager = layout.Manager (backend)
+    logger = util.setup_root_logging ()
+    config_manager = layout.Manager ()
+    with xcb_backend.Backend (dpi=96) as backend:
         cmd = StdinCmd (backend, config_manager)
-        Daemon.event_loop (backend, cmd)
+        config_manager.start (backend)
+        util.Daemon.event_loop (backend, cmd)
         sys.exit (0)

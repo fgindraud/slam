@@ -1,7 +1,29 @@
 import operator
 import select
-from functools import reduce
-from itertools import *
+import logging
+
+# Logging
+
+def setup_root_logging (filename = None):
+    root = logging.getLogger ()
+    root.setLevel (logging.DEBUG)
+    formatter = logging.Formatter (style = "{", fmt = "{asctime} :: {levelname} :: {name} :: {message}")
+    
+    if filename:
+        file_output = logging.RotatingFileHandler ("slam.log", "a", 1000000, 1)
+        file_output.setLevel (logging.DEBUG)
+        file_output.setFormatter (formatter)
+        root.addHandler (file_output)
+
+    stream_output = logging.StreamHandler ()
+    stream_output.setLevel (logging.DEBUG)
+    stream_output.setFormatter (formatter)
+    root.addHandler (stream_output)
+
+    return root
+
+def setup_logger (module_name):
+    return logging.getLogger (module_name)
 
 # Pair
 
@@ -25,7 +47,7 @@ class Pair (tuple):
         """ Provide x/y/w/h quick access """
         if attr in ["x", "w"]: return self[0]
         elif attr in ["y", "h"]: return self[1]
-        else: raise AttributeError ("Pair doesn't support '{!s}' attr (only x/y/w/h)".format (attr))
+        else: raise AttributeError ("Pair doesn't support '{}' attr (only x/y/w/h)".format (attr))
 
     def copy (self): return Pair (self)
     def swap (self): return Pair (self.y, self.x)
@@ -34,9 +56,11 @@ class Pair (tuple):
     def __sub__ (self, other): return self + (-other)
 
     def map (self, func, *others):
+        """ Apply func to tuples of firsts and second arguments to [self+others] and build the result """
         return Pair (map (func, self, *others))
 
     def __format__ (self, spec):
+        """ Pretty printing, with two str.format flags for integers sizes """
         if spec == "s": return "{}x{}".format (self.x, self.y)
         elif spec == "p": return "{}mm x {}mm".format (self.x, self.y)
         else: return str (self)
@@ -44,6 +68,7 @@ class Pair (tuple):
 # Daemon
 
 class DaemonLoopException (Exception):
+    """ Exception for infinite reactivation loop """
     pass
 
 class Daemon (object):
@@ -51,11 +76,13 @@ class Daemon (object):
     Daemon objects that listen to file descriptors and can be activated when new data is available
     A daemon can ask to be reactivated immediately even if no new data is available.
     A counter ensure that reactivations does not loop undefinitely.
+
     Must be implemented for each subclass :
         int fileno () : returns file descriptor
         bool activate () : do stuff, and returns False to stop the event loop
     """
     def activate_manually (self):
+        """ Ask the event loop to activate us again """
         self._flag_to_be_activated = True
 
     def _to_be_activated (self):
@@ -73,6 +100,7 @@ class Daemon (object):
 
     @staticmethod
     def event_loop (*daemons):
+        """ Start the event loop """
         while True:
             # Activate selected deamons
             map (Daemon._reset_activation_counter, daemons)
@@ -92,7 +120,7 @@ def class_attributes (cls):
     return [attr for attr in dir (cls) if not callable (attr) and not attr.startswith ("__")]
 
 def sequence_stringify (iterable, highlight = lambda t: False, stringify = str):
-    """ Print and join all elements of <iterable>, highlighting those matched by <highlight> """
+    """ Print and join all elements of <iterable>, highlighting those matched by <highlight : obj -> bool> """
     def formatting (data):
         return ("[{}]" if highlight (data) else "{}").format (stringify (data))
     return " ".join (map (formatting, iterable))

@@ -5,37 +5,44 @@ XCB interface part of the multi monitor daemon.
 - Signal the config manager when the current state changed
 """
 
+import operator
+import functools
 import struct
 import xcffib, xcffib.xproto, xcffib.randr
 
-from util import *
+import util
 import layout
+from util import Pair
 from layout import BackendError, BackendFatalError
 
-class Backend (Daemon):
+logger = util.setup_logger (__name__)
+
+class Backend (util.Daemon):
     ##################
     # Main Interface #
     #################
 
     def __init__ (self, **kwd):
         """
-        By default X11 forces a 96 dpi to not bother with it. It affects the reported size of the virtual screen.
-        if "dpi" is set to a value, force this dpi value.
-        if not set (default), infer dpi from physical screen info
+        Backend init. Optionnal arguments :
+            dpi :
+                By default X11 forces a 96 dpi to not bother with it. It affects the reported size of the virtual screen.
+                if set to a value, force this value
+                if not set (default), infer dpi from physical screen info
+            screen, display :
+                override X11 default connect information
         """
         self.dpi = kwd.get ("dpi", None)
-        self.debug_enabled = kwd.get ("debug", True)
-
         self.update_callback = lambda _: 0
         self.init_randr_connection (**kwd)
 
     def __enter__ (self): return self
     def __exit__ (self, type, value, tb): self.conn.disconnect ()
     
-    def fileno (self):
-        return self.conn.get_file_descriptor ()
+    def fileno (self): return self.conn.get_file_descriptor ()
 
     def activate (self):
+        """ Daemon callback """
         while self.flush_notify ():
             self.reload_state ()
             self.update_callback (self.to_concrete_layout ())
@@ -51,7 +58,7 @@ class Backend (Daemon):
         for c in self.screen_res.crtcs:
             info = self.crtcs[c]
             acc += "\t{}\t{:s}+{:s}\n".format (c, Pair.from_size (info), Pair.from_struct (info))
-            acc += "\t|\tOutput[active]: {}\n".format (sequence_stringify (info.possible, highlight = lambda o: o in info.outputs))
+            acc += "\t|\tOutput[active]: {}\n".format (util.sequence_stringify (info.possible, highlight = lambda o: o in info.outputs))
             acc += "\t|\tRotations[current]: {}\n".format (info.transform)
             acc += "\t\\\tMode: {}\n".format (info.mode)
         acc += "Outputs\n"
@@ -60,9 +67,9 @@ class Backend (Daemon):
             if info.connection == xcffib.randr.Connection.Connected:
                 acc += "\t{}\t{}\tConnected\n".format (o, info.name)
                 acc += "\t|\tSize: {:p}\n".format (Pair.from_size (info, "mm_{}"))
-                acc += "\t|\tCrtcs[active]: {}\n".format (sequence_stringify (info.crtcs, highlight = lambda c: c == info.crtc))
-                acc += "\t|\tClones: {}\n".format (sequence_stringify (info.clones))
-                acc += "\t|\tModes[pref]: {}\n".format (sequence_stringify (enumerate (info.modes), highlight = lambda t: t[0] < info.num_preferred, stringify = lambda t: t[1]))
+                acc += "\t|\tCrtcs[active]: {}\n".format (util.sequence_stringify (info.crtcs, highlight = lambda c: c == info.crtc))
+                acc += "\t|\tClones: {}\n".format (util.sequence_stringify (info.clones))
+                acc += "\t|\tModes[pref]: {}\n".format (util.sequence_stringify (enumerate (info.modes), highlight = lambda t: t[0] < info.num_preferred, stringify = lambda t: t[1]))
                 acc += "\t\\\tProperties:\n"
                 for name, prop in info.props.items ():
                     acc += "\t\t\t{}: {}\n".format (name, prop)
@@ -83,10 +90,12 @@ class Backend (Daemon):
         return dict ((o.name, find_best (o)) for o in self.outputs.values () if len (o.modes) > 0)
 
     def attach (self, callback):
+        """ Register the callback from the manager """
         self.update_callback = callback
         callback (self.to_concrete_layout ()) # initial call to let the manager update itself
 
     def apply_concrete_layout (self, concrete):
+        """ Set up a concretelayout from the manager in X """
         self._apply_concrete_layout (concrete)
         self.activate_manually () # Handle our own notifications
 
@@ -146,19 +155,26 @@ class Backend (Daemon):
             if self.is_connected (o): self.outputs[o].props = self.prop_manager.get_properties (o)
 
     def flush_notify (self):
-        ev = hadevent = self.conn.poll_for_event ()
+        """ Discards all events, returns True if one was from Randr """
+        had_randr_event = False
+        ev = self.conn.poll_for_event ()
         while ev:
+            if isinstance (ev, (xcffib.randr.ScreenChangeNotifyEvent, xcffib.randr.NotifyEvent)):
+                had_randr_event = True # Only generate new config if we received randr notifications
             if isinstance (ev, xcffib.randr.ScreenChangeNotifyEvent):
-                self.debug ("[notify] ScreenChange = {:s}, {:p} | {}".format (Pair.from_size (ev), Pair.from_size (ev, "m{}"), XcbTransform (ev.rotation)))
+                logger.debug ("[notify] ScreenChange = {:s}, {:p} | {}".format (Pair.from_size (ev), Pair.from_size (ev, "m{}"), XcbTransform (ev.rotation)))
             if isinstance (ev, xcffib.randr.NotifyEvent):
                 if ev.subCode == xcffib.randr.Notify.CrtcChange:
-                    self.debug ("[notify] CrtcChange[{}] = {:s}+{:s} | {}".format (ev.u.cc.crtc, Pair.from_size (ev.u.cc), Pair.from_struct (ev.u.cc), XcbTransform (ev.u.cc.rotation)))
-                if ev.subCode == xcffib.randr.Notify.OutputChange: self.debug ("[notify] OutputChange[{}] = crtc[{}]".format (ev.u.oc.output, ev.u.oc.crtc))
-                if ev.subCode == xcffib.randr.Notify.OutputProperty: self.debug ("[notify] OutputProperty[{}]".format (ev.u.op.output))
+                    logger.debug ("[notify] CrtcChange[{}] = {:s}+{:s} | {}".format (ev.u.cc.crtc, Pair.from_size (ev.u.cc), Pair.from_struct (ev.u.cc), XcbTransform (ev.u.cc.rotation)))
+                if ev.subCode == xcffib.randr.Notify.OutputChange:
+                    logger.debug ("[notify] OutputChange[{}] = crtc[{}]".format (ev.u.oc.output, ev.u.oc.crtc))
+                if ev.subCode == xcffib.randr.Notify.OutputProperty:
+                    logger.debug ("[notify] OutputProperty[{}]".format (ev.u.op.output))
             ev = self.conn.poll_for_event ()
-        return hadevent != None
+        return had_randr_event
 
     def to_concrete_layout (self):
+        """ Convert current X state into ConcreteLayout """
         def make_entry (o_id):
             x_o = self.outputs[o_id]
             l_o = layout.ConcreteLayout.Output (edid = x_o.props["EDID"])
@@ -171,10 +187,12 @@ class Backend (Daemon):
         return concrete
    
     def _apply_concrete_layout (self, concrete):
-        ### Allocate Crtcs ###
+        """ Internal function that push a ConcreteLayout to X """
         output_id_by_name = dict ((self.outputs[o].name, o) for o in self.outputs)
-        new_output_by_crtc = dict.fromkeys (self.crtcs)
         enabled_outputs = [n for n in concrete.outputs if concrete.outputs[n].enabled]
+        new_output_by_crtc = dict.fromkeys (self.crtcs)
+        
+        ### Allocate Crtcs ###
         unallocated = set (enabled_outputs)
         def try_allocate_crtc (c_id, o_name):
             if new_output_by_crtc[c_id] == None and o_name in unallocated:
@@ -192,7 +210,7 @@ class Backend (Daemon):
         if len (unallocated) > 0:
             raise BackendError ("crtc allocation (tmp = {}) failed for outputs {}".format (new_output_by_crtc, list (unallocated)))
 
-        ### Apply config ###
+        ### Apply config utility functions ###
         timestamp = self.screen_res.timestamp
         c_timestamp = self.screen_res.config_timestamp
 
@@ -214,11 +232,11 @@ class Backend (Daemon):
                     dpi = 25.4 * dpmm_acc / coeff_acc
             # resizing
             phy = virtual_size.map (lambda d: int (d * 25.4 / dpi))
-            self.debug ("[send] SetScreenSize = {:s}, {:p}".format (virtual_size, phy))
+            logger.debug ("[send] SetScreenSize = {:s}, {:p}".format (virtual_size, phy))
             self.conn.randr.SetScreenSizeChecked (self.root, virtual_size.w, virtual_size.h, phy.w, phy.h).check ()
         
         def set_crtc (t, c_id, pos, mode, tr, outputs):
-            self.debug ("[send] SetCrtcConfig[{}] = {} | {}".format (c_id, outputs, tr))
+            logger.debug ("[send] SetCrtcConfig[{}] = {} | {}".format (c_id, outputs, tr))
             return check_reply (self.conn.randr.SetCrtcConfig (c_id, t, c_timestamp, pos.x, pos.y, mode, tr.mask, outputs).reply ()).timestamp
         def disable_crtc (t, c_id):
             return set_crtc (timestamp, c_id, Pair (0, 0), 0, XcbTransform (), [])
@@ -226,6 +244,7 @@ class Backend (Daemon):
             o_data, o_id = concrete.outputs[o_name], output_id_by_name[o_name]
             return set_crtc (t, c_id, o_data.position, self.find_mode_id (o_data.base_size, o_id), XcbTransform.from_slam (o_data.transform), [o_id])
 
+        ### Apply config, Grabbing the server to make the update atomic ###
         self.conn.core.GrabServerChecked ().check ()
         try:
             # resize screen to max of (before, after) to avoid setcrtc() fails during modification
@@ -252,10 +271,6 @@ class Backend (Daemon):
     # Helpers #
     ###########
 
-    def debug (self, msg):
-        if self.debug_enabled:
-            print (msg)
-
     def is_connected (self, o_id):
         return self.outputs[o_id].connection == xcffib.randr.Connection.Connected
     
@@ -278,49 +293,62 @@ class Backend (Daemon):
 
 
 def mode_info (mode):
+    """ Extract size and frequency from X mode info """
     freq = int (mode.dot_clock / (mode.htotal * mode.vtotal)) if mode.htotal > 0 and mode.vtotal > 0 else 0
     return (Pair.from_size (mode), freq)
 
 def check_reply (reply):
+    """ Raise exception if reply status is not ok """
     e = xcffib.randr.SetConfig
     if reply.status == e.Success: return reply
     elif reply.status == e.InvalidConfigTime: raise BackendError ("invalid config timestamp")
     elif reply.status == e.InvalidTime: raise BackendError ("invalid timestamp")
     else: raise BackendFatalError ("Request failed")
 
+
 class XcbTransform (object):
     """
-    Xcb : reflections (xy), then trigo rotation : (rx, ry, rot), as a bitmask (xcffib.randr.Rotation)
-    Slam : reflect x, then trigo rotation : (rx, rot)
+    Stores X rotation & rotation capability masks.
+    X format : reflections (xy), then trigo rotation : (rx, ry, rot), as a bitmask (xcffib.randr.Rotation)
     """
-    flags = dict ((a, getattr (xcffib.randr.Rotation, a)) for a in class_attributes (xcffib.randr.Rotation))
-    all_flags_or = reduce (operator.__or__, flags.values ())
-    slam_to_mask = dict ((r, getattr (xcffib.randr.Rotation, "Rotate_" + str (r))) for r in layout.Transform.rotations)
+    class StaticData (object):
+        def __init__ (self):
+            self.cls = xcffib.randr.Rotation
+            self.flags_by_name = dict ((a, getattr (self.cls, a)) for a in util.class_attributes (self.cls))
+            self.all_flags = functools.reduce (operator.__or__, self.flags_by_name.values ())
+            self.flags_by_rotation_value = dict ((r, self.flags_by_name["Rotate_" + str (r)]) for r in layout.Transform.rotations)
+    static = StaticData ()
 
-    def __init__ (self, mask = xcffib.randr.Rotation.Rotate_0, allowed_masks = all_flags_or):
+    def __init__ (self, mask = static.cls.Rotate_0, allowed_masks = static.all_flags):
+        """ Init with explicit masks """
         self.mask = mask
         self.allowed_masks = allowed_masks
     @staticmethod
     def from_xcffib_struct (st):
+        """ Extract masks from xcffib struct """
         return XcbTransform (st.rotation, st.rotations)
     @staticmethod
-    def from_slam (slam, allowed_masks = all_flags_or):
-        return XcbTransform (XcbTransform.slam_to_mask[slam.rotation] | (xcffib.randr.Rotation.Reflect_X if slam.reflect else 0), allowed_masks)
+    def from_slam (slam, allowed_masks = static.all_flags):
+        """ Build from Slam rotation """
+        st = XcbTransform.static
+        return XcbTransform (st.flags_by_rotation_value[slam.rotation] | (st.cls.Reflect_X if slam.reflect else 0), allowed_masks)
 
     def to_slam (self):
-        try: [rot] = (r for r, m in XcbTransform.slam_to_mask.items () if m & self.mask)
+        """ Convert to slam Transform """
+        try: [rot] = (r for r, mask in self.static.flags_by_rotation_value.items () if mask & self.mask)
         except ValueError: raise BackendFatalError ("xcffib transformation has 0 or >1 rotation flags")
         slam = layout.Transform ()
-        if self.mask & xcffib.randr.Rotation.Reflect_X: slam = slam.reflectx ()
-        if self.mask & xcffib.randr.Rotation.Reflect_Y: slam = slam.reflecty ()
+        if self.mask & self.static.cls.Reflect_X: slam = slam.reflectx ()
+        if self.mask & self.static.cls.Reflect_Y: slam = slam.reflecty ()
         return slam.rotate (rot)
 
     def valid (self):
+        """ Check if current mask is within the capability mask """
         return self.allowed_masks & self.mask == self.mask
 
     def __str__ (self):
-        allowed_flags = ((n, f) for n, f in XcbTransform.flags.items () if f & self.allowed_masks)
-        return sequence_stringify (allowed_flags, highlight = lambda t: t[1] & self.mask, stringify = lambda t: t[0])
+        allowed_flags = ((n, f) for n, f in sorted (self.static.flags_by_name.items ()) if f & self.allowed_masks)
+        return util.sequence_stringify (allowed_flags, highlight = lambda t: t[1] & self.mask, stringify = lambda t: t[0])
 
 ##################
 # Xcb properties #
@@ -333,7 +361,14 @@ class Properties:
         watched_properties = [ "EDID", "BACKLIGHT" ]
         self.atoms = dict ((name, self.conn.core.InternAtom (False, len (name), name).reply ().atom) for name in watched_properties)
 
-    def get_properties (self, output): return dict ((name, getattr (self, "get_" + name.lower ()) (output, atom)) for name, atom in self.atoms.items ())
+    def get_properties (self, output):
+        try:
+            return dict ((name, getattr (self, "get_" + name.lower ()) (output, atom)) for name, atom in self.atoms.items ())
+        except BackendError as e:
+            raise BackendError ("output {}: ".format (output) + str (e))
+        except BackendFatalError as e:
+            raise BackendFatalError ("output {}: ".format (output) + str (e))
+
 
     @staticmethod
     def not_found (reply): return reply.format == 0 and reply.type == xcffib.xproto.Atom._None and reply.bytes_after == 0 and reply.num_items == 0
@@ -357,9 +392,11 @@ class Properties:
     def get_edid (self, output, prop_atom):
         """
         EDID (unique device identifier) Xcb property (str)
+        The bytes 8-15 are enough for identification, the rest is mode data
         """
         # Data
         data = self.conn.randr.GetOutputProperty (output, prop_atom, xcffib.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
-        if Properties.not_found (data): raise BackendError ("EDID property not found")
+        if Properties.not_found (data): return None #FIXME raise BackendError ("EDID property not found")
         if not (data.format == 8 and data.type == xcffib.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items > 0): raise BackendFatalError ("invalid EDID value formatting")
-        return ''.join ("{:x}".format (b) for b in data.data)
+        if data.data[:8] != [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]: raise BackendFatalError ("EDID lacks 1.3 constant header")
+        return ''.join (map ("{:02X}".format, data.data[8:16]))
