@@ -45,7 +45,7 @@ class Transform (object):
     
     def inverted (self): return Transform.rotations[self.rotation]
     def __eq__ (self, other): return self.rotation == other.rotation and self.reflect == other.reflect
-    __str__ = util.class_str
+    def __str__ (self): return ("R" if self.reflect else "") + str (self.rotation)
 
 ### Layouts ###
 
@@ -62,7 +62,7 @@ class AbstractLayout (object):
             self.edid = kwd.get ("edid", None)
         def copy (self): return Output (transform = self.transform.copy (), neighbours = self.neighbours.copy (), edid = self.edid)
         @staticmethod
-        def load (data): return Output (transform = Transform.load (data[0]), neighbours = data[1], edid = data[2])
+        def load (data): return AbstractLayout.Output (transform = Transform.load (data[0]), neighbours = data[1], edid = data[2])
         def dump (self): return (self.transform.dump (), self.neighbours, self.edid)
 
         def rel (self, neighbour): return self.neighbours.get (neighbour, Dir.none)
@@ -71,7 +71,7 @@ class AbstractLayout (object):
     def __init__ (self, **kwd): self.outputs = kwd.get ("outputs", {})
     def copy (self): return AbstractLayout (outputs = dict ((n, o.copy ()) for n, o in self.outputs.items ())) # deep copy
     @staticmethod
-    def load (data): return AbstractLayout (outputs = dict ((name, Output.load (d)) for name, d in data.items ()))
+    def load (data): return AbstractLayout (outputs = dict ((name, AbstractLayout.Output.load (d)) for name, d in data.items ()))
     def dump (self): return dict ((name, output.dump ()) for name, output in self.outputs.items ())
 
     def set_relation (self, na, rel, nb):
@@ -140,7 +140,7 @@ class ConcreteLayout (object):
         constraints = [ [ abstract.outputs[na].rel (nb) for nb in names ] for na in names ]
         r = slam_ext.screen_layout (virtual_screen_min, virtual_screen_max, [concrete.outputs[n].size () for n in names], constraints)
         # Fill result
-        if r == None: return None
+        if r is None: return None
         concrete.virtual_screen_size = Pair (r[0])
         for i, name in enumerate (names): concrete.outputs[name].position = Pair (r[1][i])
         return concrete
@@ -176,17 +176,20 @@ class Manager (object):
     # Init
     
     def __init__ (self):
-        self.layouts = dict () # frozenset( (name,edid=null) ) -> AbstractLayout ()
-        logger.info ("Manager created (empty)")
+        # Database : frozenset( (name,edid=null) ) -> AbstractLayout ()
+        self.layouts = dict () 
     
-    @staticmethod
-    def load (data):
-        """ Loads all stored layouts from a string (uses pickle) """
-        pass
+    def load (self, buf):
+        """ Fill the database with layouts from buf (pickle format) """
+        layout_dump_list = pickle.load (buf)
+        for layout_dump in layout_dump_list:
+            layout = AbstractLayout.load (layout_dump)
+            self.layouts[layout.key ()] = layout
 
-    def dump (self):
-        """ Output all stored layouts as a string (uses pickle) """
-        pass
+    def dump (self, buf):
+        """ Outputs manager database into buffer object (pickle format) """
+        layout_dump_list = [abstract.dump () for abstract in self.layouts.values ()]
+        pickle.dump (layout_dump_list, buf)
 
     def start (self, backend):
         self.current_concrete_layout = ConcreteLayout () # init with default empty layout

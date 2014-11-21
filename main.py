@@ -1,24 +1,10 @@
 #!/usr/bin/env python
 '''
 Daemon to manage multi monitors
-
-Wanted features:
-* Automatically use monitor on connection
-    * First : basic system, just put it on right or left in default mode
-    * After : Use EDID to match configs
-        * First plug in : add it on right or left, then save config based on current state
-        * After : select a config according to set of EDID in the system
-    * Config : output tree, primary + right/up/left/bottom, alignement to parent monitor
-* Manual adjustement dbus calls
-    * For now guess from current config
-* Backlight management
-    * Manage backlight values (scaling log/lin, ...) of every monitor with backlight (> config)
-    * Dbus calls to increase/decrease backlight
-    * Dbus calls to set again hardware values to soft ones (and call that from ACPI handler after lid button or power cord change, because this is sometimes messed up)
-* Background image management based on config
 '''
 
 import sys
+import io
 
 import layout
 import xcb_backend
@@ -38,12 +24,30 @@ class StdinCmd (util.Daemon):
         if "exit" in line: return False
         return True
 
+# Config
+log_file = "slam.log"
+db_file = "database"
+
 # Entry point
 if __name__ == "__main__":
-    logger = util.setup_root_logging ("slam.log")
+    logger = util.setup_root_logging (log_file)
+    
     config_manager = layout.Manager ()
-    with xcb_backend.Backend (dpi=96) as backend:
-        cmd = StdinCmd (backend, config_manager)
-        config_manager.start (backend)
-        util.Daemon.event_loop (backend, cmd)
-        sys.exit (0)
+    try:
+        # Try loading database
+        with io.FileIO (db_file, "r") as db:
+            logger.info ("loading layouts from '{}'".format (db_file))
+            config_manager.load (db)
+    except FileNotFoundError:
+        logger.warn ("database file '{}' not found".format (db_file))
+   
+    try:
+        with xcb_backend.Backend (dpi=96) as backend:
+            cmd = StdinCmd (backend, config_manager)
+            config_manager.start (backend)
+            util.Daemon.event_loop (backend, cmd)
+    finally:
+        # Store database in any case
+        with io.FileIO (db_file, "w") as db:
+            logger.info ("storing layouts into '{}'".format (db_file))
+            config_manager.dump (db)

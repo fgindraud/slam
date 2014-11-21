@@ -195,7 +195,7 @@ class Backend (util.Daemon):
         ### Allocate Crtcs ###
         unallocated = set (enabled_outputs)
         def try_allocate_crtc (c_id, o_name):
-            if new_output_by_crtc[c_id] == None and o_name in unallocated:
+            if new_output_by_crtc[c_id] is None and o_name in unallocated:
                 if XcbTransform.from_slam (concrete.outputs[o_name].transform, self.crtcs[c_id].rotations).valid () and output_id_by_name[o_name] in self.crtcs[c_id].possible:
                     new_output_by_crtc[c_id] = o_name
                     unallocated.remove (o_name)
@@ -216,7 +216,7 @@ class Backend (util.Daemon):
 
         def resize_screen (virtual_size):
             dpi = 96 # x default
-            if self.dpi != None:
+            if self.dpi is not None:
                 dpi = self.dpi # override setup
             else:
                 # extract from screen info : dpi is average (with screen area coeffs) of screens dpi
