@@ -1,3 +1,7 @@
+"""
+Layout manager part.
+"""
+
 import slam_ext
 import pickle
 import util

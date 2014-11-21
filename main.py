@@ -40,7 +40,7 @@ class StdinCmd (util.Daemon):
 
 # Entry point
 if __name__ == "__main__":
-    logger = util.setup_root_logging ()
+    logger = util.setup_root_logging ("slam.log")
     config_manager = layout.Manager ()
     with xcb_backend.Backend (dpi=96) as backend:
         cmd = StdinCmd (backend, config_manager)

@@ -1,7 +1,7 @@
 """
-XCB interface part of the multi monitor daemon.
+XCB interface part of the daemon.
 - Keeps a valid copy of the xrandr state (updating it on events)
-- Can generate and apply configurations from this state
+- Can generate and apply layouts from this state
 - Signal the config manager when the current state changed
 """
 

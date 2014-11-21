@@ -1,6 +1,10 @@
+"""
+Utilities
+"""
+
 import operator
 import select
-import logging
+import logging, logging.handlers
 
 # Logging
 
@@ -10,7 +14,7 @@ def setup_root_logging (filename = None):
     formatter = logging.Formatter (style = "{", fmt = "{asctime} :: {levelname} :: {name} :: {message}")
     
     if filename:
-        file_output = logging.RotatingFileHandler ("slam.log", "a", 1000000, 1)
+        file_output = logging.handlers.RotatingFileHandler ("slam.log", "a", 1000000, 1)
         file_output.setLevel (logging.DEBUG)
         file_output.setFormatter (formatter)
         root.addHandler (file_output)
