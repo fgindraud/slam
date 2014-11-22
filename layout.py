@@ -99,7 +99,7 @@ class AbstractLayout (object):
         self.outputs[na].neighbours[nb] = rel
         self.outputs[nb].neighbours[na] = rel.invert ()
 
-    def key (self): return Manager.key (self.outputs)
+    def key (self): return Database.key (self.outputs)
     def __str__ (self): return "AbstractLayout{\n" + "".join ("\t%s => %s\n" % (n, str (o)) for n, o in self.outputs.items ()) + "}"
 
 class ConcreteLayout (object):
@@ -125,7 +125,7 @@ class ConcreteLayout (object):
         self.virtual_screen_size = kwd.get ("vss", Pair (0, 0))
         self.manual = False
 
-    def key (self): return Manager.key (self.outputs)
+    def key (self): return Database.key (self.outputs)
     def __eq__ (self, other): return vars (self) == vars (other)
         
     def __str__ (self):
@@ -185,32 +185,78 @@ class ConcreteLayout (object):
 
 ### Manager ###
 
-class Manager (object):
+class DatabaseLoadError (Exception):
+    pass
+
+class Database (object):
+    version = 2
     """
-    Manages a set of configs
+    Database of layouts
+    Can be stored/loaded from/to files
+    Format v2 is:
+        * int : version number
+        * list of abstractlayout object dumps : layouts
     """
+    
     @staticmethod
     def key (output_dict):
-        """ Key for the manager map """
+        """ Key for layout structures """
         return frozenset ((name, o.edid) for name, o in output_dict.items ())
 
-    # Init
-    
     def __init__ (self):
         # Database : frozenset( (name,edid=null) ) -> AbstractLayout ()
         self.layouts = dict () 
-    
+
+    ## store / load ##
+
     def load (self, buf):
         """ Fill the database with layouts from buf (pickle format) """
-        layout_dump_list = pickle.load (buf)
-        for layout_dump in layout_dump_list:
-            layout = AbstractLayout.load (layout_dump)
-            self.layouts[layout.key ()] = layout
+        try:
+            # check version
+            version = pickle.load (buf)
+            if not isinstance (version, int):
+                raise DatabaseLoadError ("incorrect database format : version = {}".format (version))
+            if version != Database.version:
+                raise DatabaseLoadError ("incorrect database version : {} (expected {})".format (version, Database.version))
 
-    def dump (self, buf):
+            # get database
+            layout_dump_list = pickle.load (buf)
+            for layout_dump in layout_dump_list:
+                try:
+                    layout = AbstractLayout.load (layout_dump)
+                except Exception as e:
+                    raise DatabaseLoadError ("unpacking error: {}".format (e))
+
+                self.layouts[layout.key ()] = layout
+        except (OSError, EOFError) as e:
+            raise DatabaseLoadError ("io error: {}".format (e))
+        except pickle.PickleError as e:
+            raise DatabaseLoadError ("pickle error: {}".format (e))
+
+    def store (self, buf):
         """ Outputs manager database into buffer object (pickle format) """
+        # version
+        pickle.dump (int (Database.version), buf)
+
+        # database
         layout_dump_list = [abstract.dump () for abstract in self.layouts.values ()]
         pickle.dump (layout_dump_list, buf)
+
+    ## default ##
+
+    def generate_default_layout (self, key):
+        # For now, generate one without any relation.
+        #TODO : take stats over all configs to find relations
+        return AbstractLayout (outputs = dict ((name, AbstractLayout.Output (edid = edid)) for name, edid in key))
+
+class Manager (Database):
+    """
+    Manages a set of configs
+    """
+    # Init
+    
+    def __init__ (self):
+        super (Manager, self).__init__ ()
 
     def start (self, backend):
         self.current_concrete_layout = ConcreteLayout () # init with default empty layout
@@ -260,10 +306,6 @@ class Manager (object):
                 self.backend.get_preferred_sizes_by_output ())
         self.backend.apply_concrete_layout (self.current_concrete_layout)
 
-    def generate_default_layout (self, key):
-        # For now, generate one without any relation.
-        #TODO : take stats over all configs to find relations
-        return AbstractLayout (outputs = dict ((name, AbstractLayout.Output (edid = edid)) for name, edid in key))
 
     def test (self, line):
         rot = 0

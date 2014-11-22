@@ -59,9 +59,11 @@ if __name__ == "__main__":
         # Try loading database
         with io.FileIO (db_file, "r") as db:
             logger.info ("loading layouts from '{}'".format (db_file))
-            config_manager.load (db)
+            config_manager.load (io.FileIO (db_file, "r"))
     except FileNotFoundError:
         logger.warn ("database file '{}' not found".format (db_file))
+    except layout.DatabaseLoadError as e:
+        logger.error ("database file '{}' unreadable: {}".format (db_file, e))
    
     try:
         with xcb_backend.Backend (dpi=96) as backend:
@@ -72,4 +74,4 @@ if __name__ == "__main__":
         # Store database in any case
         with io.FileIO (db_file, "w") as db:
             logger.info ("storing layouts into '{}'".format (db_file))
-            config_manager.dump (db)
+            config_manager.store (db)
