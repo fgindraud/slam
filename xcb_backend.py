@@ -102,14 +102,6 @@ class Backend (util.Daemon):
     # ConfigManager Interface #
     ###########################
 
-    def get_virtual_screen_min_size (self): return Pair.from_size (self.screen_limits, "min_{}")
-    def get_virtual_screen_max_size (self): return Pair.from_size (self.screen_limits, "max_{}")
-    def get_preferred_sizes_by_output (self):
-        """ Returns the best size for each output (biggest and fastest) """
-        def find_best (o_data):
-            return max (map (self.mode_by_id, self.preferred_mode_ids (o_data))) [0]
-        return dict ((o.name, find_best (o)) for o in self.outputs.values () if len (o.modes) > 0)
-
     def attach (self, callback):
         """ Register the callback from the manager """
         self.update_callback = callback
@@ -143,6 +135,11 @@ class Backend (util.Daemon):
         # Internal state 
         screen_setup = self.conn.setup.roots[kwd.get ("screen", self.conn.pref_screen)]
         self.root = screen_setup.root
+        
+        limits = self.conn.randr.GetScreenSizeRange (self.root).reply ()
+        self.screen_limit_min = Pair.from_size (limits, "min_{}")
+        self.screen_limit_max = Pair.from_size (limits, "max_{}")
+        
         self.reload_state ()
 
         # Randr register for events
@@ -154,14 +151,12 @@ class Backend (util.Daemon):
     def reload_state (self):
         """ Updates the state by reloading everything """
         # Clean everything
-        self.screen_res, self.screen_limits, self.screen_size, self.screen_transform = None, None, None, None
+        self.screen_res, self.screen_size, self.screen_transform = None, None, None
         self.crtcs, self.outputs = {}, {}
         # Screen ressources and size range
         cookie_res = self.conn.randr.GetScreenResourcesCurrent (self.root)
-        cookie_size_range = self.conn.randr.GetScreenSizeRange (self.root)
         cookie_size = self.conn.core.GetGeometry (self.root)
         self.screen_res = cookie_res.reply ()
-        self.screen_limits = cookie_size_range.reply ()
         self.screen_size = Pair.from_size (cookie_size.reply ())
         # Crtc and Outputs
         crtc_req, output_req = {}, {}
@@ -195,39 +190,55 @@ class Backend (util.Daemon):
         return had_randr_event
 
     def to_concrete_layout (self):
-        """ Convert current X state into ConcreteLayout """
-        def make_entry (o_id):
-            x_o = self.outputs[o_id]
-            l_o = layout.ConcreteLayout.Output (edid = x_o.props["EDID"])
-            c = self.crtcs.get (x_o.crtc, None)
-            if c and self.mode_exists (c.mode):
-                l_o.enabled, l_o.base_size, l_o.position, l_o.transform = True, self.mode_by_id (c.mode) [0], Pair.from_struct (c), c.transform.to_slam ()
-            return (x_o.name, l_o)
-        concrete = layout.ConcreteLayout (outputs = dict (make_entry (o_id) for o_id in self.outputs if self.is_connected (o_id)), vss = self.screen_size.copy ())
-        concrete.compute_manual_flag (self.get_preferred_sizes_by_output ())
-        return concrete
+        """
+        Convert current X state into ConcreteLayout
+        """
+        def find_best_mode_size (o_data):
+            return max (map (self.mode_by_id, self.preferred_mode_ids (o_data))) [0]
+        def make_output_entry (o_id):
+            xcb_o_data = self.outputs[o_id]
+            layout_output = layout.ConcreteLayout.Output (edid = xcb_o_data.props["EDID"], preferred_size = find_best_mode_size (xcb_o_data))
+            crtc = self.crtcs.get (xcb_o_data.crtc, None)
+            if crtc and self.mode_exists (crtc.mode):
+                layout_output.enabled = True
+                layout_output.base_size = self.mode_by_id (crtc.mode) [0]
+                layout_output.position = Pair.from_struct (crtc)
+                layout_output.transform = crtc.transform.to_slam ()
+            return (xcb_o_data.name, layout_output)
+        
+        return layout.ConcreteLayout (
+                outputs = dict (make_output_entry (o_id) for o_id in self.outputs if self.is_connected (o_id)),
+                vs_size = self.screen_size, vs_min = self.screen_limit_min, vs_max = self.screen_limit_max)
    
     def _apply_concrete_layout (self, concrete):
-        """ Internal function that push a ConcreteLayout to X """
-        output_id_by_name = dict ((self.outputs[o].name, o) for o in self.outputs)
+        """
+        Internal function that push a ConcreteLayout to X
+        """
+        output_id_by_name = {self.outputs[o].name: o for o in self.outputs}
         enabled_outputs = [n for n in concrete.outputs if concrete.outputs[n].enabled]
         new_output_by_crtc = dict.fromkeys (self.crtcs)
         
         ### Allocate Crtcs ###
         unallocated = set (enabled_outputs)
         def try_allocate_crtc (c_id, o_name):
+            # Test if crtc / output not already allocated
             if new_output_by_crtc[c_id] is None and o_name in unallocated:
-                if XcbTransform.from_slam (concrete.outputs[o_name].transform, self.crtcs[c_id].rotations).valid () and output_id_by_name[o_name] in self.crtcs[c_id].possible:
+                # Does it fits into the Crtc ?
+                transform = XcbTransform.from_slam (concrete.outputs[o_name].transform, self.crtcs[c_id].rotations)
+                if transform.valid () and output_id_by_name[o_name] in self.crtcs[c_id].possible:
                     new_output_by_crtc[c_id] = o_name
                     unallocated.remove (o_name)
+
         for o_name in enabled_outputs: # outputs already enabled may keep the same crtc if not clones
             for c_id in self.crtcs:
                 if output_id_by_name[o_name] in self.crtcs[c_id].outputs:
                     try_allocate_crtc (c_id, o_name)
+
         for o_name in enabled_outputs: # allocate the remaining outputs
             if o_name in unallocated:
                 for c_id in self.crtcs:
                     try_allocate_crtc (c_id, o_name)
+
         if len (unallocated) > 0:
             raise BackendError ("crtc allocation (tmp = {}) failed for outputs {}".format (new_output_by_crtc, list (unallocated)))
 
@@ -272,6 +283,7 @@ class Backend (util.Daemon):
             before, after = self.screen_size, concrete.virtual_screen_size
             temporary = after.map (max, before)
             resize_screen (temporary)
+
             # apply the new crtc config in 3 steps to avoid temporarily allocating the same output to two crtcs
             for c_id in self.crtcs:
                 if new_output_by_crtc[c_id] == None and self.crtcs[c_id].num_outputs > 0: # first disable now unused crtcs
@@ -282,6 +294,7 @@ class Backend (util.Daemon):
             for c_id in self.crtcs:
                 if new_output_by_crtc[c_id] != None and self.crtcs[c_id].num_outputs <= 1: # apply new config to unused or single crtcs. as the allocation phase keeps older choices, there should be no collision here
                     timestamp = assign_crtc (timestamp, c_id, new_output_by_crtc[c_id])
+            
             # TODO disable stupid modes (panning, crtctransform, etc)
             if temporary != after: resize_screen (after)
             self.conn.flush ()
@@ -298,11 +311,14 @@ class Backend (util.Daemon):
     def mode_by_id (self, m_id):
         try: return mode_info (next (m for m in self.screen_res.modes if m.id == m_id))
         except: raise BackendFatalError ("mode {} not found".format (m_id))
+    
     def mode_exists (self, m_id):
         return len ([m for m in self.screen_res.modes if m.id == m_id]) == 1
+    
     def preferred_mode_ids (self, o_data):
         if o_data.num_preferred > 0: return (o_data.modes[i] for i in range (o_data.num_preferred))
         else: return o_data.modes
+    
     def find_mode_id (self, size, o_id):
         mode, freq = 0, 0
         for m_id in self.preferred_mode_ids (self.outputs[o_id]):
@@ -311,7 +327,6 @@ class Backend (util.Daemon):
                 mode, freq = m_id, f
         if mode == 0: raise BackendFatalError ("no matching mode for size {} and output {}".format (size, self.outputs[o_id].name))
         return mode
-
 
 def mode_info (mode):
     """ Extract size and frequency from X mode info """
@@ -335,29 +350,39 @@ class XcbTransform (object):
     class StaticData (object):
         def __init__ (self):
             self.cls = xcffib.randr.Rotation
-            self.flags_by_name = dict ((a, getattr (self.cls, a)) for a in util.class_attributes (self.cls))
+
+            self.flags_by_name = {attr: getattr (self.cls, attr) for attr in util.class_attributes (self.cls)}
             self.all_flags = functools.reduce (operator.__or__, self.flags_by_name.values ())
-            self.flags_by_rotation_value = dict ((r, self.flags_by_name["Rotate_" + str (r)]) for r in layout.Transform.rotations)
+            
+            self.flags_by_rotation_value = {rot: self.flags_by_name["Rotate_" + str (rot)] for rot in layout.Transform.rotations}
+
     static = StaticData ()
+
+    # Constructors
 
     def __init__ (self, mask = static.cls.Rotate_0, allowed_masks = static.all_flags):
         """ Init with explicit masks """
         self.mask = mask
         self.allowed_masks = allowed_masks
+
     @staticmethod
     def from_xcffib_struct (st):
         """ Extract masks from xcffib struct """
         return XcbTransform (st.rotation, st.rotations)
+
     @staticmethod
     def from_slam (slam, allowed_masks = static.all_flags):
         """ Build from Slam rotation """
         st = XcbTransform.static
         return XcbTransform (st.flags_by_rotation_value[slam.rotation] | (st.cls.Reflect_X if slam.reflect else 0), allowed_masks)
 
+    # Conversion, validity, pretty print
+
     def to_slam (self):
         """ Convert to slam Transform """
         try: [rot] = (r for r, mask in self.static.flags_by_rotation_value.items () if mask & self.mask)
         except ValueError: raise BackendFatalError ("xcffib transformation has 0 or >1 rotation flags")
+
         slam = layout.Transform ()
         if self.mask & self.static.cls.Reflect_X: slam = slam.reflectx ()
         if self.mask & self.static.cls.Reflect_Y: slam = slam.reflecty ()
@@ -403,6 +428,7 @@ class Properties:
         if Properties.not_found (data): return None
         if not (data.format > 0 and data.type == xcffib.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items == 1): raise BackendFatalError ("invalid BACKLIGHT value formatting")
         (value,) = struct.unpack_from ({ 8: "b", 16: "h", 32: "i" } [data.format], bytearray (data.data))
+        
         # Config : backlight value range
         config = self.conn.randr.QueryOutputProperty (output, prop_atom).reply ()
         if not (config.range and len (config.validValues) == 2): raise BackendFatalError ("invalid BACKLIGHT config")
@@ -417,7 +443,7 @@ class Properties:
         """
         # Data
         data = self.conn.randr.GetOutputProperty (output, prop_atom, xcffib.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
-        if Properties.not_found (data): return None #FIXME raise BackendError ("EDID property not found")
+        if Properties.not_found (data): return None
         if not (data.format == 8 and data.type == xcffib.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items > 0): raise BackendFatalError ("invalid EDID value formatting")
         if data.data[:8] != [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]: raise BackendFatalError ("EDID lacks 1.3 constant header")
         return ''.join (map ("{:02X}".format, data.data[8:16]))
