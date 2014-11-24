@@ -114,7 +114,6 @@ class AbstractLayout (object):
 
         # Get info
         def rel (self, neighbour): return self.neighbours.get (neighbour, Dir.none)
-        __str__ = util.class_str
 
     # Init / deep copy
     def __init__ (self, **kwd): self.outputs = kwd.get ("outputs", {})
@@ -137,8 +136,6 @@ class AbstractLayout (object):
     def key (self):
         """ Key for Database is set of edid """
         return frozenset (self.outputs.keys ())
-
-    def __str__ (self): return "AbstractLayout{\n" + "".join ("\t%s => %s\n" % (n, str (o)) for n, o in self.outputs.items ()) + "}"
 
 ### ConcreteLayout ###
 
@@ -163,9 +160,17 @@ class ConcreteLayout (object):
             self.preferred_size = kwd.get ("preferred_size", Pair (0, 0))
             self.edid = kwd.get ("edid", None)
         
-        def size (self): return self.transform.rectangle_size (self.base_size)
-        def __eq__ (self, other): return vars (self) == vars (other)
-        __str__ = util.class_str
+        def size (self):
+            return self.transform.rectangle_size (self.base_size)
+
+        def __eq__ (self, other):
+            return vars (self) == vars (other)
+
+        def __str__ (self):
+            return "{}: {}, tr({}), pos({:s}), size({:s}|{:s})".format (
+                    self.edid, {False:"D",True:"E"}[self.enabled],
+                    self.transform, self.position,
+                    self.base_size, self.preferred_size)
 
     def __init__ (self, **kwd):
         # Layout data
@@ -228,8 +233,10 @@ class ConcreteLayout (object):
     # Pretty print
 
     def __str__ (self):
-        outputs = ("\t%s => %s\n" % (n, str (o)) for n, o in self.outputs.items ())
-        return "ConcreteLayout(vss=%s){\n%s}" % (self.virtual_screen_size, "".join (outputs))
+        outputs = (map ("\t{0[0]} ({0[1]})\n".format, self.outputs.items ()))
+        return "ConcreteLayout(vss={:s}, vs_min={:s}, vs_max={:s}){{\n{}}}".format (
+                self.virtual_screen_size, self.virtual_screen_min, self.virtual_screen_max,
+                "".join (outputs))
 
     # Import/export
 
@@ -247,7 +254,8 @@ class ConcreteLayout (object):
             size = self.outputs[name].preferred_size
             output = ConcreteLayout.Output (enabled = True, transform = o.transform.copy (), base_size = size, edid = edid, preferred_size = size)
             return (name, output)
-        concrete = ConcreteLayout (outputs = dict (make_entry (*entry) for entry in abstract.outputs.items ()))
+        concrete = ConcreteLayout (vs_min = self.virtual_screen_min, vs_max = self.virtual_screen_max,
+                outputs = dict (make_entry (*entry) for entry in abstract.outputs.items ()))
         
         # Compute absolute layout
         edids = abstract.outputs.keys ()
@@ -376,7 +384,8 @@ class Manager (Database):
         Backend callback, called for each hardware state change.
         """
         logger.info ("backend changed")
-        logger.debug (str (new_concrete_layout))
+        logger.debug ("current " + str (self.current_concrete_layout))
+        logger.debug ("new " + str (new_concrete_layout))
 
         if new_concrete_layout == self.current_concrete_layout:
             return self.action_same_as_before ()

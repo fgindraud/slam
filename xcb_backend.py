@@ -408,12 +408,7 @@ class Properties:
         self.atoms = dict ((name, self.conn.core.InternAtom (False, len (name), name).reply ().atom) for name in watched_properties)
 
     def get_properties (self, output):
-        try:
-            return dict ((name, getattr (self, "get_" + name.lower ()) (output, atom)) for name, atom in self.atoms.items ())
-        except BackendError as e:
-            raise BackendError ("output {}: ".format (output) + str (e))
-        except BackendFatalError as e:
-            raise BackendFatalError ("output {}: ".format (output) + str (e))
+        return dict ((name, getattr (self, "get_" + name.lower ()) (output, atom)) for name, atom in self.atoms.items ())
 
 
     @staticmethod
