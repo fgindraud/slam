@@ -48,6 +48,10 @@ class Dir:
     right = 2
     above = 3
     under = 4
+    
+    @staticmethod
+    def iter ():
+        return range (5)
 
     # utils
     @staticmethod
@@ -100,12 +104,10 @@ class AbstractLayout (object):
     Relations are duplicated (a < b && b > a).
     """
     class Output (object):
-        # Init / deep copy
+        # Init
         def __init__ (self, **kwd):
             self.transform = kwd.get ("transform", Transform ())
             self.neighbours = kwd.get ("neighbours", {})
-        def copy (self):
-            return Output (transform = self.transform.copy (), neighbours = self.neighbours.copy ())
 
         # Load / dump
         @staticmethod
@@ -115,9 +117,8 @@ class AbstractLayout (object):
         # Get info
         def rel (self, neighbour): return self.neighbours.get (neighbour, Dir.none)
 
-    # Init / deep copy
+    # Init
     def __init__ (self, **kwd): self.outputs = kwd.get ("outputs", {})
-    def copy (self): return AbstractLayout (outputs = {edid: o.copy () for edid, o in self.outputs.items ()})
     
     # Load / dump 
     @staticmethod
@@ -229,6 +230,11 @@ class ConcreteLayout (object):
         Ignores outputs without Edid, and merge duplicates
         """
         return frozenset (o.edid for o in self.outputs.values () if o.edid is not None)
+
+    def edid (self, name):
+        return self.outputs[name].edid
+    def name_map (self):
+        return {o.edid: name for name, o in self.outputs.items ()}
     
     # Pretty print
 
@@ -247,20 +253,19 @@ class ConcreteLayout (object):
 
         It assumes the ConcreteLayout base object has correct Edid (bijection name <-> edid)
         """
-        edid_to_name = {o.edid: name for name, o in self.outputs.items ()}
+        names = self.name_map ()
 
         def make_entry (edid, o):
-            name = edid_to_name[edid]
-            size = self.outputs[name].preferred_size
+            size = self.outputs[names[edid]].preferred_size
             output = ConcreteLayout.Output (enabled = True, transform = o.transform.copy (), base_size = size, edid = edid, preferred_size = size)
-            return (name, output)
+            return (names[edid], output)
         concrete = ConcreteLayout (vs_min = self.virtual_screen_min, vs_max = self.virtual_screen_max,
                 outputs = dict (make_entry (*entry) for entry in abstract.outputs.items ()))
         
         # Compute absolute layout
         edids = abstract.outputs.keys ()
         constraints = [ [ abstract.outputs[ea].rel (eb) for eb in edids ] for ea in edids ]
-        sizes = [ concrete.outputs[edid_to_name[e]].size () for e in edids ]
+        sizes = [ concrete.outputs[names[e]].size () for e in edids ]
         result = slam_ext.screen_layout (self.virtual_screen_min, self.virtual_screen_max, sizes, constraints)
         if result is None:
             return None
@@ -268,7 +273,7 @@ class ConcreteLayout (object):
         # Fill result
         concrete.virtual_screen_size = Pair (result[0])
         for i, edid in enumerate (edids):
-            concrete.outputs[edid_to_name[edid]].position = Pair (result[1][i])
+            concrete.outputs[names[edid]].position = Pair (result[1][i])
         return concrete
 
     def to_abstract (self):
@@ -298,21 +303,21 @@ class DatabaseLoadError (Exception):
     pass
 
 class Database (object):
-    version = 3
+    version = 4
     """
     Database of layouts
     Can be stored/loaded from/to files
-    Format v3 is:
+    Format v4 is:
         * int : version number
         * list of abstractlayout object dumps : layouts
-        * 
+        * relation_counters dict
     """
     def __init__ (self):
         # Database : frozenset(edids) -> AbstractLayout ()
-        self.layouts = dict ()
+        self.layouts = {}
         
-        # Statistics :
-        self.relation_statistics = None
+        # Relation usage counters : (nameA, rel, nameB) -> int | with nameA < nameB
+        self.relation_counters = {}
 
     # database access and update
 
@@ -320,13 +325,38 @@ class Database (object):
         return self.layouts.get (key, None)
 
     def successfully_applied (self, abstract, concrete):
+        # update database
         self.layouts[abstract.key ()] = abstract
+
+        # increment statistics counters
+        for na in concrete.outputs:
+            for nb in concrete.outputs:
+                if na < nb:
+                    # increment relation usage counter
+                    relation = abstract.outputs[concrete.edid (na)].rel (concrete.edid (nb))
+                    key = (na, relation, nb)
+                    self.relation_counters[key] = 1 + self.relation_counters.get (key, 0)
 
     # default
 
+    def generate_statistical_layout (self, concrete, edid_set):
+        """ Generates a layout with the most used relations between outputs names (but no transformations) """
+        abstract = self.generate_default_layout (edid_set)
+        
+        for na in concrete.outputs:
+            for nb in concrete.outputs:
+                if na < nb:
+                    # For each output pair, find relation with max use.
+                    # If multiple relations have same uses, defaults to lowest valued one (none < left < right < above < under)
+                    def count (d):
+                        return self.relation_counters.get ((na, d, nb), 0)
+                    max_count = max (map (count, Dir.iter ()))
+                    reaching_max = [d for d in Dir.iter () if count (d) == max_count]
+                    choice = min (reaching_max)
+                    abstract.set_relation (self.edid (na), choice, self.edid (nb))
+
     def generate_default_layout (self, edid_set):
-        # For now, generate one without any relation.
-        #TODO : take stats over all configs to find relations
+        """ Generates a default layout with no relations or transformation """
         return AbstractLayout (outputs = {edid: AbstractLayout.Output () for edid in edid_set})
     
     # store / load
@@ -350,6 +380,11 @@ class Database (object):
             try: layout = AbstractLayout.load (layout_dump)
             except Exception as e: raise DatabaseLoadError ("unpacking error: {}".format (e))
             self.layouts[layout.key ()] = layout
+
+        # get relation_counters
+        try: self.relation_counters = pickle.load (buf)
+        except Exception as e: raise DatabaseLoadError ("pickle error: {}".format (e))
+
                 
     def store (self, buf):
         """ Outputs manager database into buffer object (pickle format) """
@@ -359,6 +394,9 @@ class Database (object):
         # database
         layout_dump_list = [abstract.dump () for abstract in self.layouts.values ()]
         pickle.dump (layout_dump_list, buf)
+
+        # relation_counters
+        pickle.dump (self.relation_counters, buf)
 
 ### Manager ###
 
@@ -383,6 +421,7 @@ class Manager (Database):
         """
         Backend callback, called for each hardware state change.
         """
+
         logger.info ("backend changed")
         logger.debug ("current " + str (self.current_concrete_layout))
         logger.debug ("new " + str (new_concrete_layout))
@@ -399,7 +438,7 @@ class Manager (Database):
             if self.get_layout (edid_set):
                 self.action_apply_from_table (new_concrete_layout, edid_set)
             else:
-                self.action_apply_default_layout (new_concrete_layout, edid_set)
+                self.action_apply_default_layout (new_concrete_layout, edid_set)#TODO add default statistics
         else:
             # Same output set
             if new_concrete_layout.manual ():
@@ -434,6 +473,15 @@ class Manager (Database):
             self.helper_apply_abstract (self.get_layout (edid_set), new_concrete_layout)
         except:
             logger.exception ("failed to apply from table")
+            raise
+    
+    def action_apply_statistical_layout (self, new_concrete_layout, edid_set):
+        # Build a default config with no relation
+        logger.info ("apply statistical layout")
+        try:
+            self.helper_apply_abstract (self.generate_statistical_layout (new_concrete_layout, edid_set), new_concrete_layout)
+        except:
+            logger.exception ("failed to apply statistical layout")
             raise
 
     def action_apply_default_layout (self, new_concrete_layout, edid_set):

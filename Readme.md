@@ -7,7 +7,6 @@ It also updates its layout database when you manually change the layout, using '
 
 ## Todo
 * Support for properties like backlight
-* Improved statistical default layout
 * deamonization : add config and frontend
 * dbus interface (for backlight, other things)
 * Plugin system to make additionnal actions when change of layout :
