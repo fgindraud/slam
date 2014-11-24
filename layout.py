@@ -39,9 +39,24 @@ class BackendError (Exception): pass
 class BackendFatalError (Exception): pass
 
 # Directions
-Dir = slam_ext.Dir
-Dir.invert = slam_ext.Dir_invert
-Dir.__str__ = slam_ext.Dir_str
+
+class Dir:
+    """ Convention between c++ extension and python """
+    # values
+    none = 0
+    left = 1
+    right = 2
+    above = 3
+    under = 4
+
+    # utils
+    @staticmethod
+    def invert (d):
+        return slam_ext.Dir_invert (d)
+
+    @staticmethod
+    def str (d):
+        return slam_ext.Dir_str (d)
 
 # Transformation
 class Transform (object):
@@ -117,7 +132,7 @@ class AbstractLayout (object):
             del self.outputs[edid_b].neighbours[edid_a]
         else:
             self.outputs[edid_a].neighbours[edid_b] = rel
-            self.outputs[edid_b].neighbours[edid_a] = rel.invert ()
+            self.outputs[edid_b].neighbours[edid_a] = Dir.invert (rel)
 
     def key (self):
         """ Key for Database is set of edid """
@@ -310,28 +325,24 @@ class Database (object):
 
     def load (self, buf):
         """ Fill the database with layouts from buf (pickle format) """
-        try:
-            # check version
-            version = pickle.load (buf)
-            if not isinstance (version, int):
-                raise DatabaseLoadError ("incorrect database format : version = {}".format (version))
-            if version != Database.version:
-                raise DatabaseLoadError ("incorrect database version : {} (expected {})".format (version, Database.version))
+        # check version
+        try: version = pickle.load (buf)
+        except Exception as e: raise DatabaseLoadError ("pickle error: {}".format (e))
 
-            # get layout database
-            layout_dump_list = pickle.load (buf)
-            for layout_dump in layout_dump_list:
-                try:
-                    layout = AbstractLayout.load (layout_dump)
-                except Exception as e:
-                    raise DatabaseLoadError ("unpacking error: {}".format (e))
-                self.layouts[layout.key ()] = layout
+        if not isinstance (version, int):
+            raise DatabaseLoadError ("incorrect database format : version = {}".format (version))
+        if version != Database.version:
+            raise DatabaseLoadError ("incorrect database version : {} (expected {})".format (version, Database.version))
+
+        # get layout database
+        try: layout_dump_list = pickle.load (buf)
+        except Exception as e: raise DatabaseLoadError ("pickle error: {}".format (e))
+        
+        for layout_dump in layout_dump_list:
+            try: layout = AbstractLayout.load (layout_dump)
+            except Exception as e: raise DatabaseLoadError ("unpacking error: {}".format (e))
+            self.layouts[layout.key ()] = layout
                 
-        except (OSError, EOFError) as e:
-            raise DatabaseLoadError ("io error: {}".format (e))
-        except pickle.PickleError as e:
-            raise DatabaseLoadError ("pickle error: {}".format (e))
-
     def store (self, buf):
         """ Outputs manager database into buffer object (pickle format) """
         # version

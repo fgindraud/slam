@@ -98,9 +98,9 @@ class Backend (util.Daemon):
                 acc += "\t{}\t{}\tDisconnected\n".format (o, info.name)
         return acc
     
-    ###########################
-    # ConfigManager Interface #
-    ###########################
+    ############################
+    # Layout Manager Interface #
+    ############################
 
     def attach (self, callback):
         """ Register the callback from the manager """
@@ -296,8 +296,8 @@ class Backend (util.Daemon):
                     timestamp = assign_crtc (timestamp, c_id, new_output_by_crtc[c_id])
             
             # TODO disable stupid modes (panning, crtctransform, etc)
-            if temporary != after: resize_screen (after)
-            self.conn.flush ()
+            if temporary != after: 
+                resize_screen (after)
         finally:
             self.conn.core.UngrabServerChecked ().check ()
 

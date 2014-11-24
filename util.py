@@ -41,7 +41,7 @@ def setup_root_logging (filename = None):
         root.addHandler (file_output)
 
     stream_output = logging.StreamHandler ()
-    stream_output.setLevel (logging.INFO)
+    stream_output.setLevel (logging.DEBUG)
     stream_output.setFormatter (formatter)
     root.addHandler (stream_output)
 
@@ -49,6 +49,8 @@ def setup_root_logging (filename = None):
 
 def setup_logger (module_name):
     return logging.getLogger (module_name)
+
+logger = setup_logger (__name__)
 
 # Pair
 

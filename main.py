@@ -35,14 +35,13 @@ import util
 # Commands
 class StdinCmd (util.Daemon):
     """ Very simple command line testing tool """
-    def __init__ (self, backend, cm):
-        self.backend, self.cm = backend, cm
+    def __init__ (self, backend):
+        self.backend = backend
     def fileno (self): return sys.stdin.fileno ()
     def activate (self):
         """ Pick one line a time, and check for keywords """
         line = sys.stdin.readline ()
         if "backend" in line: print (self.backend.dump ())
-        if "test" in line: self.cm.test (line)
         if "exit" in line: return False
         return True
 
@@ -67,7 +66,7 @@ if __name__ == "__main__":
    
     try:
         with xcb_backend.Backend (dpi=96) as backend:
-            cmd = StdinCmd (backend, config_manager)
+            cmd = StdinCmd (backend)
             config_manager.start (backend)
             util.Daemon.event_loop (backend, cmd)
     finally:

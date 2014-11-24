@@ -36,8 +36,16 @@ namespace screen_layout {
 
 	typedef std::vector< pair > pair_list;
 
-	enum dir { none, left, right, above, under };
-	static inline dir dir_invert (dir d) {
+	// Convention between python and c++
+	typedef int dir;
+	enum {
+		none = 0,
+		left = 1,
+		right = 2,
+		above = 3,
+		under = 4
+	};
+	static inline int dir_invert (dir d) {
 		switch (d) {
 			case left: return right;
 			case right: return left;
