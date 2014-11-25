@@ -25,6 +25,7 @@ Layout manager part.
 
 import sys
 import itertools
+import collections
 
 import slam_ext
 
@@ -314,7 +315,7 @@ class Database (object):
         self.layouts = {}
         
         # Relation usage counters : (nameA, rel, nameB) -> int | with nameA < nameB
-        self.relation_counters = {}
+        self.relation_counters = collections.defaultdict (int)
 
     # database access and update
 
@@ -332,8 +333,7 @@ class Database (object):
         for na, nb in itertools.permutations (concrete.outputs, 2):
             # increment relation usage counter
             relation = abstract.outputs[concrete.edid (na)].rel (concrete.edid (nb))
-            key = (na, relation, nb)
-            self.relation_counters[key] = 1 + self.relation_counters.get (key, 0)
+            self.relation_counters[(na, relation, nb)] += 1
 
     # default
 
@@ -342,17 +342,21 @@ class Database (object):
         abstract = self.generate_default_layout (edid_set)
        
         # Set relation between two outputs screens as the most frequently used between the two outputs plugs
-        for na, nb in itertools.combinations (concrete.outputs):
+        for na, nb in itertools.combinations (concrete.outputs, 2):
             # Find relation with max use.
             def count (d):
-                return self.relation_counters.get ((na, d, nb), 0) + self.relation_counters.get ((nb, Dir.invert (d), na), 0)
+                return self.relation_counters[na, d, nb] + self.relation_counters[nb, Dir.invert (d), na]
             most_used = max (Dir.iter (), key = count)
             if count (most_used) > 0:
                 abstract.set_relation (self.edid (na), choice, self.edid (nb))
 
         # For each known Edid, set transformation as the most frequent in the database
         for edid in abstract.outputs:
-            pass
+            transform_frequency = collections.defaultdict (int)
+            for key in self.layouts:
+                if edid in key:
+                    transform_frequency[self.layouts[key].outputs[edid].transform] += 1
+            abstract.outputs[edid].transform = max (transform_frequency, default = Transform (), key = transform_frequency.get)
 
         return abstract
 
@@ -378,7 +382,7 @@ class Database (object):
             self.layouts[layout.key ()] = layout
 
         # get relation_counters
-        self.relation_counters = pickle.load (buf)
+        self.relation_counters = collections.defaultdict (int, pickle.load (buf))
                 
     def store (self, buf):
         """ Outputs manager database into buffer object (pickle format) """
@@ -390,7 +394,7 @@ class Database (object):
         pickle.dump (layout_dump_list, buf)
 
         # relation_counters
-        pickle.dump (self.relation_counters, buf)
+        pickle.dump (dict (self.relation_counters), buf)
 
 ### Manager ###
 
@@ -441,7 +445,7 @@ class Manager (Database):
        
     def action_manual (self, new_concrete_layout, postfix = ""):
         # Entering manual mode, just keep current_concrete_layout updated
-        logger.warn ("do nothing, manual mode{}".format (postfix))
+        logger.info ("do nothing, manual mode{}".format (postfix))
         self.current_concrete_layout = new_concrete_layout
 
     # apply config actions
