@@ -34,15 +34,20 @@ import util
 
 # Commands
 class StdinCmd (util.Daemon):
-    """ Very simple command line testing tool """
+    """Command line testing tool"""
     def __init__ (self, backend):
         self.backend = backend
-    def fileno (self): return sys.stdin.fileno ()
+    
+    def fileno (self):
+        return sys.stdin.fileno ()
+    
     def activate (self):
-        """ Pick one line a time, and check for keywords """
+        """Check for keywords in the next line"""
         line = sys.stdin.readline ()
-        if "backend" in line: print (self.backend.dump ())
-        if "exit" in line: return False
+        if "backend" in line:
+            print (self.backend.dump ())
+        if "exit" in line:
+            return False
         return True
 
 # Config
@@ -54,23 +59,27 @@ if __name__ == "__main__":
     logger = util.setup_root_logging (log_file)
     
     config_manager = layout.Manager ()
+
+    # Try loading database file.
+    # On failure we will just have an empty database, and start from zero.
     try:
-        # Try loading database
         with io.FileIO (db_file, "r") as db:
-            logger.info ("loading layouts from '{}'".format (db_file))
             config_manager.load (io.FileIO (db_file, "r"))
+            logger.info ("loaded database from '{}'".format (db_file))
     except FileNotFoundError:
         logger.warn ("database file '{}' not found".format (db_file))
-    except layout.DatabaseLoadError as e:
-        logger.error ("database file '{}' unreadable: {}".format (db_file, e))
+    except Exception as e:
+        logger.error ("unable to load database file '{}': {}".format (db_file, e))
    
+    # Launch backend and event loop, and ensure we will write the database at exit
     try:
         with xcb_backend.Backend (dpi=96) as backend:
             cmd = StdinCmd (backend)
             config_manager.start (backend)
             util.Daemon.event_loop (backend, cmd)
+    except Exception:
+        logger.exception ("fatal error")
     finally:
-        # Store database in any case
         with io.FileIO (db_file, "w") as db:
-            logger.info ("storing layouts into '{}'".format (db_file))
             config_manager.store (db)
+            logger.info ("stored database into '{}'".format (db_file))
