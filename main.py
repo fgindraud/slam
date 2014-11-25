@@ -27,6 +27,7 @@ Daemon to manage multi monitors
 
 import sys
 import io
+import signal
 
 import layout
 import xcb_backend
@@ -71,8 +72,15 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error ("unable to load database file '{}': {}".format (db_file, e))
    
-    # Launch backend and event loop, and ensure we will write the database at exit
+    # Launch backend and event loop
+    # Ensure we will write the database at exit :
+    #   * finally block will catch normal end and exceptions
+    #   * signal handler for SIGTERM will call exit, which uses an exception
     try:
+        def sigterm_handler (sig, stack):
+            sys.exit ()
+        signal.signal (signal.SIGTERM, sigterm_handler)
+
         with xcb_backend.Backend (dpi=96) as backend:
             cmd = StdinCmd (backend)
             config_manager.start (backend)

@@ -20,7 +20,7 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 """
-Layout manager part.
+Layout manager
 """
 
 import sys
@@ -37,13 +37,11 @@ logger = util.setup_logger (__name__)
 
 ### Utils ###
 
-# Base exceptions. Fatal error should not be caught.
 class LayoutError (Exception): pass
 class LayoutFatalError (Exception): pass
 
-# Backend errors
-class BackendError (LayoutError): pass
-class BackendFatalError (LayoutFatalError): pass
+class BackendError (Exception): pass
+class BackendFatalError (Exception): pass
 
 # Directions
 
@@ -117,7 +115,7 @@ class AbstractLayout (object):
     Abstract Layout model used in the database.
 
     A layout is a set of outputs (represented by their EDID), their transformations, and relations between them.
-    It can represent multiple physical layouts if same outputs are plugged into different plugs.
+    It can represent multiple physical layouts if same outputs screens are plugged into different plugs.
 
     Relations are duplicated (a < b && b > a).
     """
@@ -155,11 +153,12 @@ class AbstractLayout (object):
 class ConcreteLayout (util.AttributeEquality):
     """
     Concrete layout representing a simplified backend state.
+    It is an interface between abstract layouts and backend, and can be converted to/from both.
     
-    A layout is a set of output (by plug), that may be enabled (actively used) or not.
+    A layout is a set of output (by output name), that may be enabled (actively used) or not.
     Each output has sizes and absolute positions (only meaningful if enabled).
+    Some non-layout additionnal info from the backend is stored, like preferred sizes and EDID.
 
-    Some non-layout additionnal info from the backend is stored, like preferred sizes and EDID
     """
     class Output (util.AttributeEquality):
         def __init__ (self, **kwd):
@@ -303,7 +302,7 @@ class ConcreteLayout (util.AttributeEquality):
 class Database (object):
     version = 4
     """
-    Database of layouts
+    Database of AbstractLayout
     Can be stored/loaded from/to files
     Format v4 is:
         * int : version number
@@ -399,7 +398,11 @@ class Database (object):
 ### Manager ###
 
 class Manager (Database):
-    """ Manages the database and backend """
+    """
+    Glue between Database and backend.
+
+    Receive and handle events from the backend.
+    """
     def __init__ (self):
         super (Manager, self).__init__ ()
 
