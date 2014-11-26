@@ -26,12 +26,11 @@ Layout manager
 import sys
 import itertools
 import collections
-
-import slam_ext
-
 import pickle
-import util
-from util import Pair
+
+from . import ext
+from . import util
+from .util import Pair
 
 logger = util.setup_logger (__name__)
 
@@ -61,11 +60,11 @@ class Dir:
     # utils
     @staticmethod
     def invert (d):
-        return slam_ext.Dir_invert (d)
+        return ext.Dir_invert (d)
 
     @staticmethod
     def str (d):
-        return slam_ext.Dir_str (d)
+        return ext.Dir_str (d)
 
 # Transformation
 class Transform (util.AttributeEquality):
@@ -268,7 +267,7 @@ class ConcreteLayout (util.AttributeEquality):
         edids = abstract.outputs.keys ()
         constraints = [[abstract.outputs[ea].rel (eb) for eb in edids] for ea in edids]
         sizes = [concrete.outputs[names[e]].size () for e in edids]
-        result = slam_ext.screen_layout (self.virtual_screen_min, self.virtual_screen_max, sizes, constraints)
+        result = ext.screen_layout (self.virtual_screen_min, self.virtual_screen_max, sizes, constraints)
         if result is None:
             raise LayoutError ("unable to compute concrete positions")
 

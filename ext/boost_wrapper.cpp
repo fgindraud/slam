@@ -71,7 +71,7 @@ namespace screen_layout {
 
 /* ---------------------- Module defintion ------------------ */
 
-BOOST_PYTHON_MODULE (slam_ext) {
+BOOST_PYTHON_MODULE (ext) {
 	using namespace boost::python;
 
 	def ("Dir_invert", screen_layout::dir_invert);

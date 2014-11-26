@@ -21,13 +21,39 @@
 
 from distutils.core import setup, Extension
 
-slam_util_module = Extension ("slam_ext",
-        libraries = ["isl", "boost_python3"],
-        sources = ["ext/boost_wrapper.cpp", "ext/screen_layout.cpp"])
 
-setup (name = "Slam",
-        version = "0.3",
+setup (
+        # Base info
+        name = "slam",
+        version = "0.4",
+
+        # Code content
+        packages = ["slam"],
+        ext_modules = [
+            Extension ("slam.ext",
+                libraries = ["isl", "boost_python3"],
+                sources = ["ext/boost_wrapper.cpp", "ext/screen_layout.cpp"])
+            ],
+
+        # Metadata
         description = "Screen layout manager",
-        py_modules = ["main", "util", "layout", "xcb_backend"],
-        ext_modules = [slam_util_module])
+        url = "https://github.com/lereldarion/slam",
+
+        author = "François GINDRAUD",
+        author_email = "francois.gindraud@gmail.com",
+        
+        license = "MIT",
+
+        # Classification
+        classifiers = [
+            "Development Status :: 3 - Alpha",
+            "Environment :: No Input/Output (Daemon)",
+            "Intended Audience :: End Users/Desktop",
+            "License :: OSI Approved :: MIT License",
+            "Operating System :: Unix",
+            "Programming Language :: Python :: 3",
+            "Topic :: Desktop Environment",
+            "Topic :: Desktop Environment :: Window Managers"
+            ]
+        )
 

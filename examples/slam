@@ -1,0 +1,16 @@
+#!/usr/bin/env python
+
+import slam
+import logging
+
+slam.start (
+        log_file = None, # stderr
+
+        db_file = "database", # local
+
+        # Default backend is xcb
+        backend_args = dict (
+            dpi = 96
+            )
+        )
+

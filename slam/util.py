@@ -29,21 +29,19 @@ import logging, logging.handlers
 
 # Logging
 
-def setup_root_logging (filename = None):
+def setup_root_logging (filename, level):
     root = logging.getLogger ()
-    root.setLevel (logging.DEBUG)
+    root.setLevel (level)
     formatter = logging.Formatter (style = "{", fmt = "{asctime} :: {levelname} :: {name} :: {message}")
     
     if filename:
-        file_output = logging.handlers.RotatingFileHandler ("slam.log", "a", 1000000, 1)
-        file_output.setLevel (logging.DEBUG)
-        file_output.setFormatter (formatter)
-        root.addHandler (file_output)
-
-    stream_output = logging.StreamHandler ()
-    stream_output.setLevel (logging.INFO)
-    stream_output.setFormatter (formatter)
-    root.addHandler (stream_output)
+        output = logging.handlers.RotatingFileHandler (filename, "a", 1000000, 1)
+    else:
+        output = logging.StreamHandler ()
+    
+    output.setLevel (level)
+    output.setFormatter (formatter)
+    root.addHandler (output)
 
     return root
 

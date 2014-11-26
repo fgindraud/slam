@@ -5,18 +5,21 @@ It stores layout for each set of connected screens (using EDID to differentiate 
 It can restore old layouts when you plug the same screens as before.
 It also updates its layout database when you manually change the layout, using 'xrandr' or a graphical tool.
 
+## Warning
+The daemon is under heavy development, and your database may be resetted if the format changes.
+It is not yet packaged as a easily usable application, so I recommend to install it in a user directory instead of /usr/...
+
 ## Todo
 * Support for properties like backlight
-* deamonization : add config and frontend
 * dbus interface (for backlight, other things)
 * Plugin system to make additionnal actions when change of layout :
-** Background
-** i3 configure by screens ?
+    * Background
+    * i3 configure by screens ?
 * Force reload of state in X when udev hotplug event ?
 
 ## Install
 
-Follow distutils: python setup.py install
+Use standard distutils: python setup.py install
 
 Requires:
 * python >= 3.2

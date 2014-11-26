@@ -31,10 +31,9 @@ import functools
 import struct
 import xcffib, xcffib.xproto, xcffib.randr
 
-import util
-import layout
-from util import Pair
-from layout import BackendError, BackendFatalError
+from . import util
+from .util import Pair
+from .layout import BackendError, BackendFatalError, Transform, ConcreteLayout
 
 logger = util.setup_logger (__name__)
 
@@ -57,9 +56,7 @@ class Backend (util.Daemon):
         self.update_callback = (lambda _: 0)
         self.init_randr_connection (**kwd)
 
-    def __enter__ (self):
-        return self
-    def __exit__ (self, type, value, tb):
+    def cleanup (self):
         self.conn.disconnect ()
     
     def fileno (self):
@@ -229,7 +226,7 @@ class Backend (util.Daemon):
 
         def make_output_entry (o_id):
             xcb_o_data = self.outputs[o_id]
-            layout_output = layout.ConcreteLayout.Output (edid = xcb_o_data.props["EDID"], preferred_size = find_best_mode_size (xcb_o_data))
+            layout_output = ConcreteLayout.Output (edid = xcb_o_data.props["EDID"], preferred_size = find_best_mode_size (xcb_o_data))
             crtc = self.crtcs.get (xcb_o_data.crtc, None)
             if crtc and self.mode_exists (crtc.mode):
                 layout_output.enabled = True
@@ -238,7 +235,7 @@ class Backend (util.Daemon):
                 layout_output.transform = crtc.transform.to_slam ()
             return (xcb_o_data.name, layout_output)
         
-        return layout.ConcreteLayout (
+        return ConcreteLayout (
                 outputs = dict (map (make_output_entry, filter (self.is_connected, self.outputs))),
                 vs_size = self.screen_size, vs_min = self.screen_limit_min, vs_max = self.screen_limit_max)
    
@@ -429,7 +426,7 @@ class XcbTransform (object):
             self.flags_by_name = util.class_attributes (self.cls)
             self.all_flags = functools.reduce (operator.__or__, self.flags_by_name.values ())
             
-            self.flags_by_rotation_value = {rot: self.flags_by_name["Rotate_" + str (rot)] for rot in layout.Transform.rotations}
+            self.flags_by_rotation_value = {rot: self.flags_by_name["Rotate_" + str (rot)] for rot in Transform.rotations}
 
     static = StaticData ()
 
@@ -446,10 +443,10 @@ class XcbTransform (object):
         return XcbTransform (st.rotation, st.rotations)
 
     @staticmethod
-    def from_slam (slam, allowed_masks = static.all_flags):
+    def from_slam (tr, allowed_masks = static.all_flags):
         """ Build from Slam rotation """
         st = XcbTransform.static
-        return XcbTransform (st.flags_by_rotation_value[slam.rotation] | (st.cls.Reflect_X if slam.reflect else 0), allowed_masks)
+        return XcbTransform (st.flags_by_rotation_value[tr.rotation] | (st.cls.Reflect_X if tr.reflect else 0), allowed_masks)
 
     # Conversion, validity, pretty print
 
@@ -460,10 +457,10 @@ class XcbTransform (object):
         except ValueError:
             raise BackendFatalError ("xcffib transformation has 0 or >1 rotation flags")
 
-        slam = layout.Transform ()
-        if self.mask & self.static.cls.Reflect_X: slam = slam.reflectx ()
-        if self.mask & self.static.cls.Reflect_Y: slam = slam.reflecty ()
-        return slam.rotate (rot)
+        tr = Transform ()
+        if self.mask & self.static.cls.Reflect_X: tr = tr.reflectx ()
+        if self.mask & self.static.cls.Reflect_Y: tr = tr.reflecty ()
+        return tr.rotate (rot)
 
     def valid (self):
         """ Check if current mask is within the capability mask """
