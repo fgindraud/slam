@@ -5,13 +5,13 @@ It stores layout for each set of connected screens (using EDID to differentiate 
 It can restore old layouts when you plug the same screens as before.
 It also updates its layout database when you manually change the layout, using 'xrandr' or a graphical tool.
 
-## Warning
-The daemon is under heavy development, and your database may be resetted if the format changes.
-It is not yet packaged as a easily usable application, so I recommend to install it in a user directory instead of /usr/...
-
 ## Todo
 * Support for properties like backlight
-* dbus interface (for backlight, other things)
+* dbus interface :
+    * backlight change
+    * force normalize of manual state
+    * get state info
+    * force backend reload (interface for hotplug events)
 * Plugin system to make additionnal actions when change of layout :
     * Background
     * i3 configure by screens ?
@@ -26,3 +26,13 @@ Requires:
 * ISL library (usually shipped with gcc)
 * Boost::Python
 * xcffib python Xcb binding
+
+## Usage
+
+The daemon is available as a python library.
+To launch it, you need to create a python file importing the library, and start this python file as the daemon:
+
+    import slam
+    slam.start(<options>)
+
+

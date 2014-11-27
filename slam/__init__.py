@@ -93,6 +93,9 @@ def start (**config):
         try:
             config_manager.start (backend)
             util.Daemon.event_loop (backend)
+        except Exception:
+            logger.error ("logging backend state:\n" + backend.dump ())
+            raise
         finally:
             backend.cleanup ()
 
