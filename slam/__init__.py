@@ -42,20 +42,23 @@ def default_configuration (config_dict):
         if dir_path != "":
             os.makedirs (dir_path, exist_ok = True)
 
-    default_working_dir = "~/.config/slam/"
+    default_working_dir = os.path.join (os.path.expanduser ("~"), ".config", "slam")
 
     # Logging
-    if config_dict.setdefault ("log_file", default_working_dir + "log") is not None:
+    if config_dict.setdefault ("log_file", os.path.join (default_working_dir, "log")) is not None:
         ensure_path_writable (config_dict["log_file"])
     config_dict.setdefault ("log_level", logging.INFO)
 
     # Database
-    config_dict.setdefault ("db_file", default_working_dir + "database")
+    config_dict.setdefault ("db_file", os.path.join (default_working_dir, "database"))
     ensure_path_writable (config_dict["db_file"])
 
     # Backend
     config_dict.setdefault ("backend_module", xcb_backend)
     config_dict.setdefault ("backend_args", {})
+
+    # Oneshot mode (start, apply config, stop)
+    config_dict.setdefault ("oneshot", False)
 
 def start (**config):
     """
@@ -65,6 +68,7 @@ def start (**config):
     """
     default_configuration (config)
     logger = util.setup_root_logging (config["log_file"], config["log_level"])
+    logger.info ("session start")
 
     config_manager = layout.Manager ()
 
@@ -92,17 +96,22 @@ def start (**config):
         backend = config["backend_module"].Backend (**config["backend_args"])
         try:
             config_manager.start (backend)
-            util.Daemon.event_loop (backend)
+            if not config["oneshot"]:
+                util.Daemon.event_loop (backend)
         except Exception:
+            # Log backend detailed state in case of error
             logger.error ("logging backend state:\n" + backend.dump ())
             raise
         finally:
             backend.cleanup ()
 
     except Exception:
+        # Log all top level errors
         logger.exception ("fatal error")
     finally:
         with io.FileIO (db_file, "w") as db:
             config_manager.store (db)
             logger.info ("stored database into '{}'".format (db_file))
+
+        logger.info ("session end")
 

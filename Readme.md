@@ -5,6 +5,14 @@ It stores layout for each set of connected screens (using EDID to differentiate 
 It can restore old layouts when you plug the same screens as before.
 It also updates its layout database when you manually change the layout, using 'xrandr' or a graphical tool.
 
+## Usage
+
+The daemon is available as a python library.
+To launch it, you need to create a python file importing the library, and start this python file as the daemon:
+
+    import slam
+    slam.start(<options>)
+
 ## Todo
 * Support for properties like backlight
 * dbus interface :
@@ -19,20 +27,13 @@ It also updates its layout database when you manually change the layout, using '
 
 ## Install
 
-Use standard distutils: python setup.py install
-
 Requires:
 * python >= 3.2
 * ISL library (usually shipped with gcc)
 * Boost::Python
 * xcffib python Xcb binding
 
-## Usage
+Use standard distutils (--user will place it in a user local directory):
 
-The daemon is available as a python library.
-To launch it, you need to create a python file importing the library, and start this python file as the daemon:
-
-    import slam
-    slam.start(<options>)
-
+    python setup.py install [--user]
 

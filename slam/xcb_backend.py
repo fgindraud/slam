@@ -98,7 +98,7 @@ class Backend (util.Daemon):
         acc += "Outputs\n"
         for o in self.screen_res.outputs:
             info = self.outputs[o]
-            if info.connection == xcffib.randr.Connection.Connected:
+            if self.is_connected (o):
                 acc += "\t{}\t{}\tConnected\n".format (o, info.name)
                 acc += "\t|\tSize: {:p}\n".format (Pair.from_size (info, "mm_{}"))
                 acc += "\t|\tCrtcs[active]: {}\n".format (util.sequence_stringify (
