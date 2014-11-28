@@ -68,7 +68,7 @@ def start (**config):
     """
     default_configuration (config)
     logger = util.setup_root_logging (config["log_file"], config["log_level"])
-    logger.info ("session start")
+    logger.info ("SESSION START")
 
     config_manager = layout.Manager ()
 
@@ -113,5 +113,5 @@ def start (**config):
             config_manager.store (db)
             logger.info ("stored database into '{}'".format (db_file))
 
-        logger.info ("session end")
+        logger.info ("SESSION END")
 

@@ -25,7 +25,7 @@ from distutils.core import setup, Extension
 setup (
         # Base info
         name = "slam",
-        version = "0.4",
+        version = "0.4.1",
 
         # Code content
         packages = ["slam"],

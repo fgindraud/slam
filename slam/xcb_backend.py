@@ -167,7 +167,7 @@ class Backend (util.Daemon):
     def reload_state (self):
         """ Updates the state by reloading everything """
         # Get screen ressources and screen size (using geometry of root window)
-        cookie_res = self.conn.randr.GetScreenResourcesCurrent (self.root)
+        cookie_res = self.conn.randr.GetScreenResources (self.root)
         cookie_size = self.conn.core.GetGeometry (self.root)
         self.screen_res = cookie_res.reply ()
         self.screen_size = Pair.from_size (cookie_size.reply ())
@@ -305,7 +305,7 @@ class Backend (util.Daemon):
             # Gui programs probably read this size and compute the dpi from it.
             phy = Pair (map (lambda pixels: int (pixels * mm_per_inch / dpi), virtual_size))
             logger.debug ("[send] SetScreenSize = {:s}, {:p}".format (virtual_size, phy))
-            self.conn.randr.SetScreenSizeChecked (self.root, virtual_size.w, virtual_size.h, phy.w, phy.h).check ()
+            self.conn.randr.SetScreenSize (self.root, virtual_size.w, virtual_size.h, phy.w, phy.h, is_checked = True).check ()
        
         # Crtc setup wrapper are simple, and just do some data formatting from slam to xcb.
         # set_crtc is the lowest level
@@ -325,7 +325,7 @@ class Backend (util.Daemon):
         # We grab the server to make all requests appear 'atomic' to other listeners of xrandr events.
         # It will force X to ignore other clients until we ungrab.
         # Ungrabing the server is ensured whatever happens with a 'finally' bloc
-        self.conn.core.GrabServerChecked ().check ()
+        self.conn.core.GrabServer (is_checked = True).check ()
         try:
             # SetCrtc will fail if the new crtc doesn't fit into the current virtual screen.
             # So resize the virtual screen to max (before, after) sizes to avoid this problem.
@@ -362,7 +362,7 @@ class Backend (util.Daemon):
             if temporary != after: 
                 resize_screen (after)
         finally:
-            self.conn.core.UngrabServerChecked ().check ()
+            self.conn.core.UngrabServer (is_checked = True).check ()
 
     ###########
     # Helpers #
