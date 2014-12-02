@@ -346,7 +346,7 @@ class Database (object):
                 return self.relation_counters[na, d, nb] + self.relation_counters[nb, Dir.invert (d), na]
             most_used = max (Dir.iter (), key = count)
             if count (most_used) > 0:
-                abstract.set_relation (self.edid (na), choice, self.edid (nb))
+                abstract.set_relation (concrete.edid (na), choice, concrete.edid (nb))
 
         # For each known Edid, set transformation as the most frequent in the database
         for edid in abstract.outputs:
