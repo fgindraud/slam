@@ -23,6 +23,8 @@
 Layout manager
 """
 
+import os
+import io
 import sys
 import itertools
 import collections
@@ -308,7 +310,11 @@ class Database (object):
         * list of abstractlayout object dumps : layouts
         * relation_counters dict : (output_nameA, relation, output_nameB) for every pair of outputs
     """
-    def __init__ (self):
+    def __init__ (self, db_file):
+        # Load from database file
+        self.db_file = db_file
+        self.load_database ()
+        
         # Database : frozenset(edids) -> AbstractLayout ()
         self.layouts = {}
         
@@ -332,6 +338,8 @@ class Database (object):
             # increment relation usage counter
             relation = abstract.outputs[concrete.edid (na)].rel (concrete.edid (nb))
             self.relation_counters[(na, relation, nb)] += 1
+
+        self.store_database ()
 
     # default
 
@@ -362,7 +370,7 @@ class Database (object):
         """ Generates a default layout with no relations or transformation """
         return AbstractLayout (outputs = {edid: AbstractLayout.Output () for edid in edid_set})
     
-    # store / load
+    # store / load buffer version
 
     def load (self, buf):
         """ Read the database with layouts from buf (pickle format) """
@@ -394,6 +402,29 @@ class Database (object):
         # relation_counters
         pickle.dump (dict (self.relation_counters), buf)
 
+    # store / load file version
+
+    def load_database (self):
+        try:
+            with io.FileIO (self.db_file, "r") as db:
+                self.load (db)
+                logger.info ("loaded database from '{}'".format (self.db_file))
+        except FileNotFoundError:
+            logger.warn ("database file '{}' not found".format (self.db_file))
+        except Exception as e:
+            logger.error ("unable to load database file '{}': {}".format (self.db_file, e))
+
+    def store_database (self):
+        # Write to a temporary file
+        temp_file = self.db_file + ".temp"
+        with io.FileIO (temp_file, "w") as db:
+            self.store (db)
+
+        # On success copy it to new position
+        os.rename (temp_file, self.db_file)
+        logger.info ("stored database into '{}'".format (self.db_file))
+
+
 ### Manager ###
 
 class Manager (Database):
@@ -402,8 +433,8 @@ class Manager (Database):
 
     Receive and handle events from the backend.
     """
-    def __init__ (self):
-        super (Manager, self).__init__ ()
+    def __init__ (self, *args, **kwd):
+        super (Manager, self).__init__ (*args, **kwd)
 
     def start (self, backend):
         # Init with default empty layout

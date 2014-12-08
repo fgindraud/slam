@@ -26,7 +26,6 @@ Frontend
 
 import sys
 import os
-import io
 import signal
 import errno
 import logging
@@ -34,6 +33,8 @@ import logging
 from . import util
 from . import layout
 from . import xcb_backend
+
+# Config and start
 
 def default_configuration (config_dict):
     """ Complete the config dict with default setup """ 
@@ -70,24 +71,13 @@ def start (**config):
     logger = util.setup_root_logging (config["log_file"], config["log_level"])
     logger.info ("SESSION START")
 
-    config_manager = layout.Manager ()
-
     # Try loading database file.
     # On failure we will just have an empty database, and start from zero.
-    db_file = config["db_file"]
-    try:
-        with io.FileIO (db_file, "r") as db:
-            config_manager.load (io.FileIO (db_file, "r"))
-            logger.info ("loaded database from '{}'".format (db_file))
-    except FileNotFoundError:
-        logger.warn ("database file '{}' not found".format (db_file))
-    except Exception as e:
-        logger.error ("unable to load database file '{}': {}".format (db_file, e))
+    config_manager = layout.Manager (config["db_file"])
 
     # Launch backend and event loop
-    # Ensure we will write the database at exit :
-    #   * finally block will catch normal end and exceptions
-    #   * signal handler for SIGTERM will call exit, which uses an exception
+    # Exit nicely when asked by catching SIGTERM
+    # db_file is written at each modification of database to avoid failures
     try:
         def sigterm_handler (sig, stack):
             sys.exit ()
@@ -109,9 +99,5 @@ def start (**config):
         # Log all top level errors
         logger.exception ("fatal error")
     finally:
-        with io.FileIO (db_file, "w") as db:
-            config_manager.store (db)
-            logger.info ("stored database into '{}'".format (db_file))
-
         logger.info ("SESSION END")
 
