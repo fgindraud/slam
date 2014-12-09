@@ -311,15 +311,15 @@ class Database (object):
         * relation_counters dict : (output_nameA, relation, output_nameB) for every pair of outputs
     """
     def __init__ (self, db_file):
-        # Load from database file
-        self.db_file = db_file
-        self.load_database ()
-        
         # Database : frozenset(edids) -> AbstractLayout ()
         self.layouts = {}
         
         # Relation usage counters : (nameA, rel, nameB) -> int | with nameA < nameB
         self.relation_counters = collections.defaultdict (int)
+        
+        # Load from database file
+        self.db_file = db_file
+        self.load_database ()
 
     # database access and update
 
