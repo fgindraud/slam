@@ -492,6 +492,7 @@ class Manager (Database):
     # BackendError:
     #   * invalid time > x state changed, abort modification. event_loop will reload state and see what to do then
     #   * crtc allocation error > crtc shortage. using default state will also fail, so abort modification
+    #   * x request error > abort modification
     # (Layout|Backend)FatalError:
     #   * invalid program state, bail out, do not catch
     # <other, like xcb badmatch>:

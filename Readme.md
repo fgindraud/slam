@@ -29,7 +29,7 @@ To launch it, you need to create a python file importing the library, and start 
 
 Requires:
 * python >= 3.2
-* ISL library (usually shipped with gcc)
+* ISL library
 * Boost::Python
 * xcffib python Xcb binding
 

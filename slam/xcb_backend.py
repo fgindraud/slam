@@ -356,11 +356,29 @@ class Backend (util.Daemon):
                 if new_output_by_crtc[c_id] is not None and self.crtcs[c_id].num_outputs <= 1:
                     timestamp = assign_crtc (timestamp, c_id, new_output_by_crtc[c_id])
             
-            # TODO disable stupid modes (panning, crtctransform, etc)
+            # TODO disable stupid modes (panning, crtctransform, etc) ?
 
             # After all Crtc modifications, set the final virtual screen size if needed
             if temporary != after: 
                 resize_screen (after)
+
+        except BackendError:
+            # Settings crtcs may fail due to invisible constraints (like limited clocks generators)
+            # If a SetCrtc request failed in a clean way (reported an error), try to restore old config
+            # However, X protocol errors are treated as fatal (ie resetting the crtc will probably fail horribly too)
+
+            logger.info ("restoring state")
+
+            # Clean state : disable all crtcs and reset screen size
+            for c_id in self.crtcs:
+                timestamp = disable_crtc (timestamp, c_id)
+            resize_screen (before)
+
+            # Restore crtcs
+            for c_id, d in self.crtcs.items ():
+                timestamp = set_crtc (timestamp, c_id, Pair.from_struct (d), d.mode, d.transform, d.outputs)
+
+            raise
         finally:
             self.conn.core.UngrabServer (is_checked = True).check ()
 
@@ -408,15 +426,16 @@ def mode_info (mode):
 
 def check_reply (reply):
     """ Raise exception if reply status is not ok """
+    req_name = reply.__class__
     e = xcffib.randr.SetConfig
     if reply.status == e.Success: return reply
 
     # Invalid timing error should be temporary, let the manager recover
-    elif reply.status == e.InvalidConfigTime: raise BackendError ("invalid config timestamp")
-    elif reply.status == e.InvalidTime: raise BackendError ("invalid timestamp")
+    elif reply.status == e.InvalidConfigTime: raise BackendError ("invalid config timestamp ({})".format (req_name))
+    elif reply.status == e.InvalidTime: raise BackendError ("invalid timestamp ({})".format (req_name))
 
     # Other errors may indicate a bigger problem
-    else: raise BackendFatalError ("Request failed")
+    else: raise BackendError ("request failed ({})".format (req_name))
 
 class XcbTransform (object):
     """
