@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <limits>
 #include <isl/set.h>
+#include <isl/constraint.h>
 
 namespace screen_layout {
 
@@ -177,26 +178,26 @@ namespace screen_layout {
 				more_than_const (v, 0);
 			}
 			void more_than_const (int v, int constant) { // constant <= v
-				isl_constraint * more = isl_inequality_alloc (isl_local_space_copy (ls));
+				isl_constraint * more = isl_constraint_alloc_inequality (isl_local_space_copy (ls));
 				more = isl_constraint_set_coefficient_si (more, isl_dim_set, v, 1);
 				more = isl_constraint_set_constant_si (more, -constant);
 				solutions = isl_set_add_constraint (solutions, more); 
 			}
 			void less_than_const (int v, int constant) { // v <= constant
-				isl_constraint * less = isl_inequality_alloc (isl_local_space_copy (ls));
+				isl_constraint * less = isl_constraint_alloc_inequality (isl_local_space_copy (ls));
 				less = isl_constraint_set_coefficient_si (less, isl_dim_set, v, -1);
 				less = isl_constraint_set_constant_si (less, constant);
 				solutions = isl_set_add_constraint (solutions, less); 
 			}
 			void offseted_less_than_var (int v, int offset, int v2) { // v + offset <= v2
-				isl_constraint * less = isl_inequality_alloc (isl_local_space_copy (ls));
+				isl_constraint * less = isl_constraint_alloc_inequality (isl_local_space_copy (ls));
 				less = isl_constraint_set_coefficient_si (less, isl_dim_set, v, -1);
 				less = isl_constraint_set_constant_si (less, -offset);
 				less = isl_constraint_set_coefficient_si (less, isl_dim_set, v2, 1);
 				solutions = isl_set_add_constraint (solutions, less);
 			}
 			void offseted_diff_less_than_var (int va, int vb, int offset, int mv) { // va - vb + offset <= mv
-				isl_constraint * less = isl_inequality_alloc (isl_local_space_copy (ls));
+				isl_constraint * less = isl_constraint_alloc_inequality (isl_local_space_copy (ls));
 				less = isl_constraint_set_coefficient_si (less, isl_dim_set, va, -1);
 				less = isl_constraint_set_coefficient_si (less, isl_dim_set, vb, 1);
 				less = isl_constraint_set_constant_si (less, -offset);
@@ -204,7 +205,7 @@ namespace screen_layout {
 				solutions = isl_set_add_constraint (solutions, less);
 			}
 			void equality (const std::vector< int > & coeffs) {
-				isl_constraint * equ = isl_equality_alloc (isl_local_space_copy (ls));
+				isl_constraint * equ = isl_constraint_alloc_equality (isl_local_space_copy (ls));
 				for (unsigned c = 0; c < coeffs.size (); ++c)
 					equ = isl_constraint_set_coefficient_si (equ, isl_dim_set, c, coeffs[c]);
 				solutions = isl_set_add_constraint (solutions, equ);
