@@ -20,21 +20,17 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 """
-Background setting plugin
+Backlight management plugin
 """
 
 from .. import util
 
 logger = util.setup_logger (__name__)
 
-# Xcb side : 
-# - create pixmap
-# - fill pixmap (with PutImage, raw format)
-# - XSetWindowBackgroundPixmap
+# Make the prop object available in Layout.Output object ? (maybe subclass of a layout.Properties)
+# Initialize watched props by edid (from layout) + ones declared by plugins
+#  
+# Callbacks on plugins for modifs.
+# Add dbus interface (with list of interfaces defined by core + plugins)
 #
-# Plugin side :
-# - load images (from directory, at random)
-# - patchwork them according to concrete layout
-#
-# Pillow/PIL
-
+# Split management from layout ?

@@ -227,7 +227,7 @@ class Backend (util.Daemon):
 
         def make_output_entry (o_id):
             xcb_o_data = self.outputs[o_id]
-            layout_output = layout.ConcreteLayout.Output (edid = xcb_o_data.props["EDID"], preferred_size = find_best_mode_size (xcb_o_data))
+            layout_output = layout.ConcreteLayout.Output (edid = xcb_o_data.props["edid"], preferred_size = find_best_mode_size (xcb_o_data))
             crtc = self.crtcs.get (xcb_o_data.crtc, None)
             if crtc and self.mode_exists (crtc.mode):
                 layout_output.enabled = True
@@ -504,14 +504,20 @@ class Properties:
         self.conn = conn
         # Get atoms of property names
         watched_properties = [ "EDID", "BACKLIGHT" ]
-        self.atoms = dict ((name, self.conn.core.InternAtom (False, len (name), name).reply ().atom) for name in watched_properties)
-
-    def get_properties (self, output):
-        return dict ((name, getattr (self, "get_" + name.lower ()) (output, atom)) for name, atom in self.atoms.items ())
-
-
+        self.atoms = dict ((name.lower (), self.conn.core.InternAtom (False, len (name), name).reply ().atom) for name in watched_properties)
+    
     @staticmethod
     def not_found (reply): return reply.format == 0 and reply.type == xcffib.xproto.Atom._None and reply.bytes_after == 0 and reply.num_items == 0
+
+    def get_properties (self, output):
+        return dict ((name, getattr (self, "get_" + name) (output, atom)) for name, atom in self.atoms.items ())
+    def set_property (self, name, value):
+        try:
+            correct_name = name.lower ()
+            atom = self.atoms[correct_name]
+            return getattr (self, "set_" + correct_name) (value, atom)
+        except KeyError: raise BackendError ("property {} not found".format (correct_name))
+        except AttributeError: raise BackendError ("property {} cannot be set".format (correct_name))
 
     def get_backlight (self, output, prop_atom):
         """
@@ -529,6 +535,10 @@ class Properties:
         lowest, highest = config.validValues
         if not (lowest <= value and value <= highest): raise BackendFatalError ("BACKLIGHT value out of bounds")
         return (value, lowest, highest)
+
+    def set_backlight (self, value, prop_atom):
+        data = struct.pack ("=i", value)
+        self.conn.randr.ChangeOutputProperty (output, prop_atom, xcffib.xproto.Atom.INTEGER, 32, xcffib.xproto.PropMode.Replace, 1, data, is_checked = True).check ()
 
     def get_edid (self, output, prop_atom):
         """
