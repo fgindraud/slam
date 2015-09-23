@@ -434,7 +434,7 @@ class Manager (Database):
     Receive and handle events from the backend.
     """
     def __init__ (self, *args, **kwd):
-        super (Manager, self).__init__ (*args, **kwd)
+        super ().__init__ (*args, **kwd)
 
     def start (self, backend):
         # Init with default empty layout

@@ -67,7 +67,7 @@ class Pair (tuple):
     def __new__ (cls, a, b = None):
         """ Takes a pair of values, or an iterable """
         if b != None: a = (a, b)
-        return super (Pair, cls).__new__ (cls, a)
+        return super ().__new__ (cls, a)
    
     @classmethod
     def from_struct (cls, struct, xkey="x", ykey="y"):

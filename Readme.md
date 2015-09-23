@@ -15,7 +15,7 @@ To launch it, you need to create a python file importing the library, and start 
     import slam
     slam.start(<options>)
 
-An example file is available in `examples/` with a description of possible parameters.
+An example file is available at `examples/slam` with a description of possible parameters.
 You should probably not use this for more than 3 screens (exponential algorithm for position computation)
 
 Todo
@@ -23,9 +23,6 @@ Todo
 
 * more resistant to stupid hardware
 	* statistical layout if not Edid
-	* do not fail on broken Edid (log anyway, use statistical)
-	* what to store in database in these cases ?
-		* either 
 * Move away from superexponential ISL craziness (use tree and lockpoints)
 * dbus interface :
 	* backlight change

@@ -147,7 +147,7 @@ class Backend (util.Daemon):
             raise BackendFatalError ("version: requested >= {}, got {}".format (Client.randr_version, version))
 
         # Properties query object
-        self.prop_manager = Properties (self.conn) # TODO
+        self.prop_manager = PropertyQuery (self.conn) # TODO
 
         # Internal state 
         screen_setup = self.conn.setup.roots[kwd.get ("screen", self.conn.pref_screen)]
@@ -456,7 +456,7 @@ class XcbTransform (object):
 
     def to_slam (self):
         """ Convert to slam Transform """
-        try: 
+        try:
             [rot] = (r for r, mask in self.static.flags_by_rotation_value.items () if mask & self.mask)
         except ValueError:
             raise BackendFatalError ("xcffib transformation has 0 or >1 rotation flags")
@@ -478,55 +478,89 @@ class XcbTransform (object):
 # Xcb properties #
 ##################
 
-class Properties:
-    def __init__ (self, conn):
-        self.conn = conn
-        # Get atoms of property names
-        watched_properties = [ "EDID", "BACKLIGHT" ]
-        self.atoms = dict ((name.lower (), self.conn.core.InternAtom (False, len (name), name).reply ().atom) for name in watched_properties)
-    
-    @staticmethod
-    def not_found (reply): return reply.format == 0 and reply.type == xcffib.xproto.Atom._None and reply.bytes_after == 0 and reply.num_items == 0
+class Fail (Exception):
+    """ Local exception """
+    pass
 
-    def get_properties (self, output):
-        return dict ((name, getattr (self, "get_" + name) (output, atom)) for name, atom in self.atoms.items ())
-    def set_property (self, name, value):
-        try:
-            correct_name = name.lower ()
-            atom = self.atoms[correct_name]
-            return getattr (self, "set_" + correct_name) (value, atom)
-        except KeyError: raise BackendError ("property {} not found".format (correct_name))
-        except AttributeError: raise BackendError ("property {} cannot be set".format (correct_name))
+class PropertyQuery:
+    """ Allow to query/change property values """
+    class XInterface:
+        """ Wraps the X11 atom naming system """
+        def __init__ (self, conn):
+            self.conn = conn
+            self.atoms = {}
+        def atom (self, name):
+            if name not in self.atoms:
+                self.atoms[name] = self.conn.core.InternAtom (False, len (name), name).reply ().atom
+            return self.atoms[name]
+        def get_property (self, output, name):
+            data = self.conn.randr.GetOutputProperty (output, self.atom (name), xcffib.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
+            if data.format == 0 and data.type == xcffib.xproto.Atom._None and data.bytes_after == 0 and data.num_items == 0:
+                raise Fail ("property '{}' not found".format (name))
+            return data
+        def set_property (self, output, name, type, format, elem, data):
+            self.conn.randr.ChangeOutputProperty (output, self.atom (name), type, format, xcffib.xproto.PropMode.Replace, elem, data, is_checked = True).check ()
+        def property_config (self, output, name):
+            return self.conn.randr.QueryOutputProperty (output, self.atom (name)).reply ()
 
-    def get_backlight (self, output, prop_atom):
-        """
-        Backlight Xcb property (value, lowest, highest)
-        """
-        # Data : backlight value
-        data = self.conn.randr.GetOutputProperty (output, prop_atom, xcffib.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
-        if Properties.not_found (data): return None
-        if not (data.format > 0 and data.type == xcffib.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items == 1): raise BackendFatalError ("invalid BACKLIGHT value formatting")
-        (value,) = struct.unpack_from ({ 8: "b", 16: "h", 32: "i" } [data.format], bytearray (data.data))
-        
-        # Config : backlight value range
-        config = self.conn.randr.QueryOutputProperty (output, prop_atom).reply ()
-        if not (config.range and len (config.validValues) == 2): raise BackendFatalError ("invalid BACKLIGHT config")
-        lowest, highest = config.validValues
-        if not (lowest <= value and value <= highest): raise BackendFatalError ("BACKLIGHT value out of bounds")
-        return (value, lowest, highest)
+    class Base:
+        """ Property base class """
+        def __init__ (self, x):
+            self.x = x
 
-    def set_backlight (self, value, prop_atom):
-        data = struct.pack ("=i", value)
-        self.conn.randr.ChangeOutputProperty (output, prop_atom, xcffib.xproto.Atom.INTEGER, 32, xcffib.xproto.PropMode.Replace, 1, data, is_checked = True).check ()
-
-    def get_edid (self, output, prop_atom):
+    class Edid (Base):
         """
         EDID (unique device identifier) Xcb property (str)
         The bytes 8-15 are enough for identification, the rest is mode data
         """
-        # Data
-        data = self.conn.randr.GetOutputProperty (output, prop_atom, xcffib.xproto.GetPropertyType.Any, 0, 10000, False, False).reply ()
-        if Properties.not_found (data): return None
-        if not (data.format == 8 and data.type == xcffib.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items > 0): raise BackendFatalError ("invalid EDID value formatting")
-        if data.data[:8] != [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]: raise BackendFatalError ("EDID lacks 1.3 constant header")
-        return ''.join (map ("{:02X}".format, data.data[8:16]))
+        name = "EDID"
+        def __init__ (self, *args):
+            super ().__init__ (*args)
+        def get (self, output):
+            try:
+                data = self.x.get_property (output, self.name)
+                if not (data.format == 8 and data.type == xcffib.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items > 0): raise Fail ("invalid 'edid' value formatting")
+                if data.data[:8] != [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]: raise Fail ("'edid' lacks 1.3 constant header")
+                return ''.join (map ("{:02X}".format, data.data[8:16]))
+            except Fail as e:
+                logger.info (e)
+                return None
+
+    class Backlight (Base):
+        """
+        Backlight Xcb property (value, lowest, highest)
+        """
+        name = "BACKLIGHT"
+        def __init__ (self, *args):
+            super ().__init__ (*args)
+        def get (self, output):
+            try: data = self.x.get_property (output, self.name)
+            except Fail: return None # no backlight interface is not an error
+            try:
+                # Data : backlight value
+                if not (data.format > 0 and data.type == xcffib.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items == 1): raise Fail ("invalid 'backlight' value formatting")
+                (value,) = struct.unpack_from ({ 8: "b", 16: "h", 32: "i" } [data.format], bytearray (data.data))
+
+                # Config : backlight value range
+                config = self.x.property_config (output, self.name)
+                if not (config.range and len (config.validValues) == 2): raise Fail ("invalid 'backlight' config")
+                lowest, highest = config.validValues
+                if not (lowest <= value and value <= highest): raise Fail ("'backlight' value out of bounds")
+                return (value, lowest, highest)
+            except Fail as e:
+                logger.info (e)
+                return None
+        def set (self, output, value):
+            self.x.set_property (output, "backlight", xcffib.xproto.Atom.INTEGER, 32, 1, struct.pack ("=i", value))
+
+    def __init__ (self, conn):
+        x = self.XInterface (conn)
+        self.properties = dict ((cls.name.lower (), cls (x)) for cls in [self.Edid, self.Backlight])
+
+    def get_properties (self, output):
+        return dict ((name, prop.get (output)) for name, prop in self.properties.items ())
+    def set_property (self, output, name, value):
+        try: return self.properties[name.lower ()].set (output, value)
+        except Fail as e: raise BackendError (e)
+        except AttributeError: raise BackendError ("property {} cannot be set".format (name.lower ()))
+
