@@ -1,16 +1,58 @@
 #!/usr/bin/env python
 
+# Slam has no command-line interface yet, as some arguments have structure and are annoying to convey through only text (dicts !).
+
+# What you probably want to do is just that :
 import slam
-import logging
+slam.start ()
+# It loads the python modules, and then start the deamon with default settings.
 
+
+# If you want to customize, here is an example of slam.start() with all possible settings specified :
+import logging # To have logging level constants.
 slam.start (
-        log_file = None, # stderr
+        # default = ... is used if the value is *unspecified* (not None)
 
-        db_file = "database", # local
+        ## Logging setup
 
-        # Default backend is xcb
+        # Log file
+        # default = ~/.config/slam/log
+        # None : stderr
+        # explicit path/filename : use this file
+        log_file = None,
+
+        # Log level
+        # default = logging.INFO
+        # values : one of logging.* levels
+        log_level = logging.INFO,
+
+        ## Layout database
+
+        # default = ~/.config/slam/database
+        # explicit path/filename : use this file
+        db_file = "database",
+
+        ## Backend
+
+        # Backend choice (only xcb (X11) is supported)
+        # default = slam.xcb_backend
+        backend_module = slam.xcb_backend,
+
+        # Backend arguments
+        # default = {} (empty dict)
         backend_args = dict (
+            # Dpi setting that X reports to programs.
+            # This dpi is usually irrelevant as it doesn't make sense with multiple screens
+            # Most Gui toolkit (Qt/Gtk) programs use per-screen dpi and will do strange things if you change this global dpi (why don't they just ignore it !?)
+            # Older programs might do crappy things with very different dpi screens...
+            # Well, you probably just want to forget this thing and use the X default.
+            # default = 96
             dpi = 96
-            )
+            ),
+
+        ## Oneshot mode
+        # Start, set the layout according to database, quit
+        # default = False
+        oneshot = False
         )
 

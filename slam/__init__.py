@@ -37,7 +37,7 @@ from . import xcb_backend
 # Config and start
 
 def default_configuration (config_dict):
-    """ Complete the config dict with default setup """ 
+    """ Complete the config dict with default setup """
     def ensure_path_writable (path):
         dir_path = os.path.dirname (path)
         if dir_path != "":

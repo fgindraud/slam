@@ -20,12 +20,14 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 from setuptools import setup, Extension
-
+import io
 
 setup (
         # Base info
         name = "slam",
-        version = "0.4.2",
+        version = "0.4.3",
+        author = "François GINDRAUD",
+        author_email = "francois.gindraud@gmail.com",
 
         # Code content
         packages = ["slam"],
@@ -37,11 +39,8 @@ setup (
 
         # Metadata
         description = "Screen layout manager",
+        long_description = io.open ("Readme.md", encoding = "utf-8").read (),
         url = "https://github.com/lereldarion/slam",
-
-        author = "François GINDRAUD",
-        author_email = "francois.gindraud@gmail.com",
-        
         license = "MIT",
 
         # Classification

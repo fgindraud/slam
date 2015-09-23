@@ -49,11 +49,12 @@ class Backend (util.Daemon):
             dpi :
                 By default X11 forces a 96 dpi to not bother with it. It affects the reported size of the virtual screen.
                 if set to a value, force this value
-                if not set (default), infer dpi from physical screen info
+                if not set (default), use 96
+                This value doesn't make sense anyway when more than 1 screen exists
             screen, display :
                 override X11 default connect information
         """
-        self.dpi = kwd.get ("dpi", None)
+        self.dpi = kwd.get ("dpi", 96)
         self.update_callback = (lambda _: 0)
         self.init_randr_connection (**kwd)
 
@@ -68,7 +69,7 @@ class Backend (util.Daemon):
         # Flush all events
         if self.flush_notify ():
             # If one of them was from Randr, update the state, and notify manager
-            try: 
+            try:
                 self.reload_state ()
             except BackendError as e:
                 # Failure means another change arrived during reload. So reload again
@@ -201,7 +202,7 @@ class Backend (util.Daemon):
         while ev:
             # Detect if we received at least one randr event
             if isinstance (ev, (xcffib.randr.ScreenChangeNotifyEvent, xcffib.randr.NotifyEvent)):
-                had_randr_event = True 
+                had_randr_event = True
             
             # Print debug info for each randr event
             if isinstance (ev, xcffib.randr.ScreenChangeNotifyEvent):
@@ -258,7 +259,7 @@ class Backend (util.Daemon):
                     unallocated.remove (o_name)
         
         # Outputs already enabled may keep the same crtc if not clones
-        for o_name in enabled_outputs: 
+        for o_name in enabled_outputs:
             for c_id in self.crtcs:
                 if output_id_by_name[o_name] in self.crtcs[c_id].outputs:
                     try_allocate_crtc (c_id, o_name)
@@ -277,33 +278,11 @@ class Backend (util.Daemon):
         c_timestamp = self.screen_res.config_timestamp
 
         def resize_screen (virtual_size):
-            # Compute a dpi value (dots per inch)
-            # 
-            # If it exists, use override value self.dpi
-            # Else use a weighted average of reported dpi of output (weights = pixel number)
-            # If outputs reports invalid dpi (phy_size = 0x0), return default X11 value dpi=96
+            # The dpi is used to compute the physical size of the virtual screen (required by X when we resize)
+            # Old Gui programs might read this size and compute the dpi from it.
+            # Newer program should infer per-screen dpi and ignore this value...
             mm_per_inch = 25.4
-
-            if self.dpi is not None:
-                dpi = self.dpi
-            else:
-                dots_per_mm_sum, coeff_sum = 0, 0
-                for n in enabled_outputs:
-                    phy = Pair.from_size (self.outputs[output_id_by_name[n]], "mm_{}")
-                    virt = concrete.outputs[n].base_size
-                    if phy.w > 0 and phy.h > 0:
-                        coeff = virt.w * virt.h
-                        dots_per_mm_sum += coeff * (virt.w / (phy.w + 0.5) + virt.h / (phy.h + 0.5))
-                        coeff_sum += coeff * 2
-
-                if coeff_sum > 0 and dots_per_mm_sum > 0:
-                    dpi = dots_per_mm_sum / (coeff_sum * mm_per_inch)
-                else:
-                    dpi = 96
-
-            # The dpi is used to compute the physical size of the virtual screen.
-            # Gui programs probably read this size and compute the dpi from it.
-            phy = Pair (map (lambda pixels: int (pixels * mm_per_inch / dpi), virtual_size))
+            phy = Pair (map (lambda pixels: int (pixels * mm_per_inch / self.dpi), virtual_size))
             logger.debug ("[send] SetScreenSize = {:s}, {:p}".format (virtual_size, phy))
             self.conn.randr.SetScreenSize (self.root, virtual_size.w, virtual_size.h, phy.w, phy.h, is_checked = True).check ()
        
