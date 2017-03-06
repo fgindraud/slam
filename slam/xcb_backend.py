@@ -290,7 +290,7 @@ class Backend (util.Daemon):
         # set_crtc is the lowest level
         def set_crtc (t, c_id, pos, mode, tr, outputs):
             logger.debug ("[send] SetCrtcConfig[{}] = {} | {}".format (c_id, outputs, tr))
-            request = self.conn.randr.SetCrtcConfig (c_id, t, c_timestamp, pos.x, pos.y, mode, tr.mask, outputs)
+            request = self.conn.randr.SetCrtcConfig (c_id, t, c_timestamp, pos.x, pos.y, mode, tr.mask, len (outputs), outputs)
             return check_reply (request.reply ()).timestamp
 
         def disable_crtc (t, c_id):
