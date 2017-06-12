@@ -37,12 +37,15 @@ def default_configuration (config_dict):
 
     default_working_dir = Path.home ().joinpath(".config", "slam")
     def normalize_or_default_path (key, default_path):
-        f = config_dict.get (key)
-        if f is None:
-            f = default_path
+        if key in config_dict:
+            f = config_dict[key]
+            if f is not None:
+                f = Path (f) # Normalize if not None
         else:
-            f = Path (f)
-        f.parent.mkdir (parents=True, exist_ok=True)
+            f = default_path # Use default
+        # None is propagated as is
+        if f is not None:
+            f.parent.mkdir (parents=True, exist_ok=True)
         config_dict[key] = f
 
     # Logging
