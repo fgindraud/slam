@@ -134,7 +134,13 @@ class Daemon (object):
 
     @staticmethod
     def event_loop (*daemons):
-        """ Event loop """
+        # Quit nicely on SIGTERM
+        import signal
+        def sigterm_handler (sig, stack):
+            import sys
+            sys.exit ()
+        signal.signal (signal.SIGTERM, sigterm_handler)
+        # Event loop itself
         while True:
             # Activate deamons until no one has the activation flag raised
             map (Daemon._reset_activation_counter, daemons)

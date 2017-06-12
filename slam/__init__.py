@@ -77,15 +77,8 @@ def start (**config):
     config_manager = layout.Manager (config["db_file"])
 
     # Launch backend and event loop
-    # Exit nicely when asked by catching SIGTERM
     # db_file is written at each modification of database to avoid failures
     try:
-        import signal
-        def sigterm_handler (sig, stack):
-            import sys
-            sys.exit ()
-        signal.signal (signal.SIGTERM, sigterm_handler)
-
         backend = config["backend_module"].Backend (**config["backend_args"])
         try:
             config_manager.start (backend)
