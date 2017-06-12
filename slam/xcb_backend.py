@@ -190,7 +190,7 @@ class Backend (util.Daemon):
         self.outputs = {}
         for o in self.screen_res.outputs:
             self.outputs[o] = check_reply (output_req[o].reply ())
-            self.outputs[o].name = bytearray (self.outputs[o].name).decode ()
+            self.outputs[o].name = self.outputs[o].name.to_string ()
             if self.is_connected (o):
                 self.outputs[o].props = self.prop_manager.get_properties (o)
 
@@ -539,7 +539,7 @@ class PropertyQuery:
             try:
                 # Data : backlight value
                 if not (data.format > 0 and data.type == xcffib.xproto.Atom.INTEGER and data.bytes_after == 0 and data.num_items == 1): raise Fail ("invalid 'backlight' value formatting")
-                (value,) = struct.unpack_from ({ 8: "b", 16: "h", 32: "i" } [data.format], bytearray (data.data))
+                (value,) = struct.unpack_from ({ 8: "b", 16: "h", 32: "i" } [data.format], data.data.buf ())
 
                 # Config : backlight value range
                 config = self.x.property_config (output, self.name)
