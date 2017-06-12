@@ -23,9 +23,6 @@
 Layout manager
 """
 
-import os
-import io
-import sys
 import itertools
 import collections
 import pickle
@@ -183,6 +180,7 @@ class ConcreteLayout (util.AttributeEquality):
                     self.base_size, self.preferred_size)
 
     def __init__ (self, **kwd):
+        import sys
         # Layout data
         self.outputs = kwd.get ("outputs", {})
         self.virtual_screen_size = kwd.get ("vs_size", Pair (0, 0))
@@ -406,7 +404,7 @@ class Database (object):
 
     def load_database (self):
         try:
-            with io.FileIO (self.db_file, "r") as db:
+            with self.db_file.open ("rb") as db:
                 self.load (db)
                 logger.info ("loaded database from '{}'".format (self.db_file))
         except FileNotFoundError:
@@ -416,12 +414,12 @@ class Database (object):
 
     def store_database (self):
         # Write to a temporary file
-        temp_file = self.db_file + ".temp"
-        with io.FileIO (temp_file, "w") as db:
+        temp_file = self.db_file.with_suffix (".temp")
+        with temp_file.open ("wb") as db:
             self.store (db)
 
         # On success copy it to new position
-        os.rename (temp_file, self.db_file)
+        temp_file.rename (self.db_file)
         logger.info ("stored database into '{}'".format (self.db_file))
 
 

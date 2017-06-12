@@ -38,7 +38,7 @@ Install
 -------
 
 Requires:
-* python >= 3.2
+* python >= 3.4
 * ISL library
 * Boost::Python
 * xcffib python Xcb binding

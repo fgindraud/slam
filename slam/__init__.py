@@ -24,35 +24,33 @@ Daemon to manage multi monitors
 Frontend
 '''
 
-import sys
-import os
-import signal
-import errno
-import logging
-
-from . import util
-from . import layout
-from . import xcb_backend
-
 # Config and start
 
 def default_configuration (config_dict):
-    """ Complete the config dict with default setup """
-    def ensure_path_writable (path):
-        dir_path = os.path.dirname (path)
-        if dir_path != "":
-            os.makedirs (dir_path, exist_ok = True)
+    from pathlib import Path
+    import logging
+    from . import xcb_backend
+    """
+    Complete the config dict with default setup.
+    Also normalize Paths to use pathlib.
+    """
 
-    default_working_dir = os.path.join (os.path.expanduser ("~"), ".config", "slam")
+    default_working_dir = Path.home ().joinpath(".config", "slam")
+    def normalize_or_default_path (key, default_path):
+        f = config_dict.get (key)
+        if f is None:
+            f = default_path
+        else:
+            f = Path (f)
+        f.parent.mkdir (parents=True, exist_ok=True)
+        config_dict[key] = f
 
     # Logging
-    if config_dict.setdefault ("log_file", os.path.join (default_working_dir, "log")) is not None:
-        ensure_path_writable (config_dict["log_file"])
+    normalize_or_default_path ("log_file", default_working_dir.joinpath ("log"))
     config_dict.setdefault ("log_level", logging.INFO)
 
     # Database
-    config_dict.setdefault ("db_file", os.path.join (default_working_dir, "database"))
-    ensure_path_writable (config_dict["db_file"])
+    normalize_or_default_path ("db_file", default_working_dir.joinpath ("database"))
 
     # Backend
     config_dict.setdefault ("backend_module", xcb_backend)
@@ -67,6 +65,9 @@ def start (**config):
 
     Config parameters : see slam.default_configuration
     """
+    from . import util
+    from . import layout
+
     default_configuration (config)
     logger = util.setup_root_logging (config["log_file"], config["log_level"])
     logger.info ("SESSION START")
@@ -79,7 +80,9 @@ def start (**config):
     # Exit nicely when asked by catching SIGTERM
     # db_file is written at each modification of database to avoid failures
     try:
+        import signal
         def sigterm_handler (sig, stack):
+            import sys
             sys.exit ()
         signal.signal (signal.SIGTERM, sigterm_handler)
 
