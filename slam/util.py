@@ -1,4 +1,4 @@
-# Copyright (c) 2013-2015 Francois GINDRAUD
+# Copyright (c) 2013-2017 Francois GINDRAUD
 # 
 # Permission is hereby granted, free of charge, to any person obtaining
 # a copy of this software and associated documentation files (the
@@ -23,8 +23,6 @@
 Utilities
 """
 
-import operator
-import select
 import logging, logging.handlers
 
 # Logging
@@ -98,62 +96,126 @@ class Pair (tuple):
 
 # Daemon
 
+# Daemon
+
 class Daemon (object):
     """
-    Daemon objects that listen to file descriptors and can be activated when new data is available
-    A daemon can ask to be reactivated immediately even if no new data is available.
-    A counter ensure that reactivations does not loop undefinitely.
+    Daemon objects are objects that can activated when some conditions happen in an event_loop.
+    They can be activated if:
 
-    Must be implemented for each subclass :
-        int fileno () : returns file descriptor
-        bool activate () : do stuff, and returns False to stop the event loop
+    1/ New data is available on a file descriptor.
+    To enable this behavior, fileno() must return a descriptor integer instead of None
+    This integer must be constant for the event_loop.
+
+    2/ The wait in the event_loop timeouts.
+    To enable this, timeout() must return an integer >= 0 (in seconds) instead of None
+
+    3/ The daemon is activated manually.
+    During execution, some code calls d.activate_manually() on the daemon to make it activate.
+    This is useful to reactivate a daemon event if no new data is available.
+    A counter ensure that reactivations does not loop undefinitely (it triggers an error).
+
+    Finally, an activate() callback function must be implemented.
+    It must return a bool indicating if the event loop should continue.
+    During its execution, d.activation_reason() gives the reason for activation.
     """
+
+    NOT_ACTIVATED = 0
+    ACTIVATED_MANUAL = 1
+    ACTIVATED_TIMEOUT = 2
+    ACTIVATED_DATA = 3
+
+    # Default version of API
+    def fileno (self):
+        return None
+    def timeout (self):
+        return None
+    def activate (self):
+        raise NotImplementedError
+
+    # Methods provided to subclasses
+    def __init__ (self):
+        """ Creates internal variables """
+        self._activation_reason = self.NOT_ACTIVATED
+        self._current_activation_reason = self.NOT_ACTIVATED
+        self._activation_counter = 0
+
     def activate_manually (self):
         """ Ask the event loop to activate us again """
-        self._flag_to_be_activated = True
+        self._activation_reason = self.ACTIVATED_MANUAL
 
-    def _to_be_activated (self):
-        # Try-except handles the init case, where the flag doesn't exist
-        try:
-            return self._flag_to_be_activated
-        except AttributeError:
-            return False
+    def activation_reason (self):
+        """ Gives us the activation reason for this call of activate() """
+        return self._current_activation_reason
 
-    def _reset_activation_counter (self):
-        self._activation_counter = 0
-    
+    # Internal stuff
+    def _is_activated (self):
+        return self._activation_reason != self.NOT_ACTIVATED
     def _activate (self):
-        # If activation counter doesn't exist, we are not in an event loop and we don't care
-        try:
-            self._activation_counter += 1
-            if self._activation_counter > 10:
-                raise RuntimeError ("daemon reactivation loop detected")
-        except AttributeError:
-            pass
-        return self.activate ()
+        # Detect possible activate_manually () loop
+        self._activation_counter += 1
+        if self._activation_counter > 100:
+            raise RuntimeError ("Daemon.event_loop: reactivation loop detected")
+        # Set context for activate (), then clean
+        self._current_activation_reason = self._activation_reason
+        self._activation_reason = self.NOT_ACTIVATED
+        continue_event_loop = self.activate ()
+        self._current_activation_reason = self.NOT_ACTIVATED
+        return continue_event_loop
 
+    # Top level event_loop system
     @staticmethod
     def event_loop (*daemons):
+        """
+        Take a list of daemons as input, handle their activation in an event loop.
+        fileno(): is supposed constant (only read once).
+        timeout(): read at each cycle ; only the smallest timeout daemon is activated for timeout.
+        """
         # Quit nicely on SIGTERM
         import signal
         def sigterm_handler (sig, stack):
             import sys
             sys.exit ()
         signal.signal (signal.SIGTERM, sigterm_handler)
-        # Event loop itself
-        while True:
-            # Activate deamons until no one has the activation flag raised
-            map (Daemon._reset_activation_counter, daemons)
-            while any (map (Daemon._to_be_activated, daemons)):
-                d = next (filter (Daemon._to_be_activated, daemons))
-                d._flag_to_be_activated = False
-                if d._activate () == False:
-                    return
 
-            # Raise activation flag on all deamons with new input data
-            new_data, _, _ = select.select (daemons, [], [])
-            for d in new_data:
-                d._flag_to_be_activated = True
+        # Event loop setup : use selector library
+        import selectors
+        selector_device = selectors.DefaultSelector ()
+        try:
+            for d in daemons:
+                if d.fileno () is not None:
+                    selector_device.register (d, selectors.EVENT_READ)
+
+            while True:
+                # Activate deamons until no one has the activation flag raised
+                for d in daemons:
+                    d._activation_counter = 0
+                while any (map (Daemon._is_activated, daemons)):
+                    d = next (filter (Daemon._is_activated, daemons))
+                    if d._activate () == False:
+                        return
+
+                # First determine if a timeout is used, and which daemons will timeout first
+                timeout = None
+                lowest_timeout_daemons = []
+                for d, t in ((d, d.timeout()) for d in daemons):
+                    if t is not None:
+                        if timeout is None or t < timeout:
+                            timeout = t
+                            lowest_timeout_daemons = [d]
+                        elif t == timeout:
+                            lowest_timeout_daemons.append (d)
+                # Check for input data using select
+                activated_daemons = selector_device.select (timeout)
+                if len (activated_daemons) > 0:
+                    for key, _ in activated_daemons:
+                        key.fileobj._activation_reason = Daemon.ACTIVATED_DATA
+                else:
+                    # Timeout
+                    for d in lowest_timeout_daemons:
+                        d._activation_reason = Daemon.ACTIVATED_TIMEOUT
+        finally:
+            selector_device.close ()
 
 # Class introspection and pretty print
 
