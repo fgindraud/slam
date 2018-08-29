@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <limits>
 #include <isl/set.h>
+#include <isl/space.h>
 #include <isl/constraint.h>
 
 namespace screen_layout {
