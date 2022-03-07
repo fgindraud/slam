@@ -1,0 +1,14 @@
+[package]
+name = "slam"
+version = "0.1.0"
+edition = "2021"
+authors = ["François Gindraud <francois.gindraud@gmail.com>"]
+description = "Save multi-screen layouts and restore them when needed"
+
+[dependencies]
+anyhow = "^1"
+dirs = "^4" # config dir
+gumdrop = "^0.8" # cmd line parsing
+
+# xcb backend, defines a feature
+xcb = { version = "^1", optional = true } 
