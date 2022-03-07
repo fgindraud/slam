@@ -8,10 +8,13 @@ trait Backend {
 #[cfg(feature = "xcb")]
 mod xcb;
 
-fn start_backend() -> Option<Box<dyn Backend>> {
+fn start_backend() -> Result<Box<dyn Backend>, anyhow::Error> {
     #[cfg(feature = "xcb")]
-    return Some(Box::new(xcb::XcbBackend));
-    None
+    match xcb::XcbBackend::start() {
+        Ok(backend) => return Ok(Box::new(backend)),
+        Err(err) => eprintln!("Cannot start Xcb backend: {}", err),
+    }
+    Err(anyhow::Error::msg("no working backend"))
 }
 
 #[derive(Debug, Options)]
@@ -37,9 +40,9 @@ fn main() -> Result<(), anyhow::Error> {
         }
     };
 
-    let backend = start_backend();
+    let backend = start_backend()?;
 
-    dbg!(database_path, backend.is_some());
+    dbg!(database_path);
 
     Ok(())
 }

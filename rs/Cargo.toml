@@ -11,4 +11,4 @@ dirs = "^4" # config dir
 gumdrop = "^0.8" # cmd line parsing
 
 # xcb backend, defines a feature
-xcb = { version = "^1", optional = true } 
+xcb = { version = "^1", features = ["randr"], optional = true }
