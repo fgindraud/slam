@@ -59,9 +59,23 @@ impl super::Backend for XcbBackend {
 fn check_randr_event(event: xcb::Event) -> bool {
     match event {
         xcb::Event::RandR(e) => {
+            use xcb::Xid;
             match e {
                 xcb::randr::Event::ScreenChangeNotify(e) => (),
-                xcb::randr::Event::Notify(e) => (),
+                xcb::randr::Event::Notify(e) => match e.u() {
+                    xcb::randr::NotifyData::Oc(e) => {
+                        log::debug!(
+                            "event OutputChange[{}] = {:?} crtc {}",
+                            Xid::resource_id(&e.output()),
+                            e.connection(),
+                            Xid::resource_id(&e.crtc())
+                        )
+                    }
+                    xcb::randr::NotifyData::Op(e) => {
+                        log::debug!("event OutputProperty[{}]", Xid::resource_id(&e.output()))
+                    }
+                    _ => (),
+                },
             }
             true
         }

@@ -14,10 +14,15 @@ struct DaemonOptions {
 
     #[options(help = "path to database file (default: <system_config_dir>/slam/database.json)")]
     database: Option<PathBuf>,
+
+    #[options(help = "sets log level: error warn info debug trace")]
+    log_level: Option<log::Level>,
 }
 
 fn main() -> Result<(), anyhow::Error> {
     let options = DaemonOptions::parse_args_default_or_exit();
+
+    simple_logger::init_with_level(options.log_level.unwrap_or(log::Level::Warn))?;
 
     let database_path = match options.database {
         Some(path) => path,

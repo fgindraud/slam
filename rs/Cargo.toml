@@ -9,6 +9,8 @@ description = "Save multi-screen layouts and restore them when needed"
 anyhow = "^1"
 dirs = "^4" # config dir
 gumdrop = "^0.8" # cmd line parsing
+log = "^0.4"
+simple_logger = "^2"
 
 # xcb backend, defines a feature
 xcb = { version = "^1", features = ["randr"], optional = true }
