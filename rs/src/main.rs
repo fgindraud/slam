@@ -2,20 +2,11 @@ use gumdrop::Options;
 use std::path::PathBuf;
 
 trait Backend {
-    //
+    fn wait_for_change(&mut self) -> Result<(), anyhow::Error>;
 }
 
 #[cfg(feature = "xcb")]
 mod xcb;
-
-fn start_backend() -> Result<Box<dyn Backend>, anyhow::Error> {
-    #[cfg(feature = "xcb")]
-    match xcb::XcbBackend::start() {
-        Ok(backend) => return Ok(Box::new(backend)),
-        Err(err) => eprintln!("Cannot start Xcb backend: {}", err),
-    }
-    Err(anyhow::Error::msg("no working backend"))
-}
 
 #[derive(Debug, Options)]
 struct DaemonOptions {
@@ -40,9 +31,18 @@ fn main() -> Result<(), anyhow::Error> {
         }
     };
 
-    let backend = start_backend()?;
-
     dbg!(database_path);
 
-    Ok(())
+    #[cfg(feature = "xcb")]
+    match xcb::XcbBackend::start() {
+        Ok(mut backend) => return run_daemon(&mut backend),
+        Err(err) => eprintln!("Cannot start Xcb backend: {}", err),
+    }
+    Err(anyhow::Error::msg("No working available backend"))
+}
+
+fn run_daemon(backend: &mut dyn Backend) -> Result<(), anyhow::Error> {
+    loop {
+        backend.wait_for_change()?
+    }
 }
