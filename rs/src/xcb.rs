@@ -1,3 +1,5 @@
+use crate::common::*;
+
 pub struct XcbBackend {
     connection: xcb::Connection,
     root_window: xcb::x::Window,
@@ -65,14 +67,15 @@ fn check_randr_event(event: xcb::Event) -> bool {
                 xcb::randr::Event::Notify(e) => match e.u() {
                     xcb::randr::NotifyData::Oc(e) => {
                         log::debug!(
-                            "event OutputChange[{}] = {:?} crtc {}",
+                            "[event] OutputChange[{}] = {:?} {:?} crtc {}",
                             Xid::resource_id(&e.output()),
                             e.connection(),
+                            Transform::from(e.rotation()),
                             Xid::resource_id(&e.crtc())
                         )
                     }
                     xcb::randr::NotifyData::Op(e) => {
-                        log::debug!("event OutputProperty[{}]", Xid::resource_id(&e.output()))
+                        log::debug!("[event] OutputProperty[{}]", Xid::resource_id(&e.output()))
                     }
                     _ => (),
                 },
@@ -136,4 +139,49 @@ fn query_output_set_state(
         crtcs,
         outputs,
     })
+}
+
+// xcb Rotation : apply reflect_x/y then a rotation. Stored as bitmask.
+impl From<xcb::randr::Rotation> for Transform {
+    // xcb representation is not unique, thus a conversion is needed.
+    // conversion is applying transforms in sequence to an initially neutral Transform.
+    fn from(r: xcb::randr::Rotation) -> Transform {
+        use xcb::randr::Rotation as XcbT;
+        let mut transform = Transform::default();
+        if r.contains(XcbT::REFLECT_X) {
+            transform = transform.reflect_x();
+        }
+        if r.contains(XcbT::REFLECT_Y) {
+            transform = transform.reflect_y();
+        }
+        // theoretically all rotation flags could be present. ignore rot0 == noop.
+        if r.contains(XcbT::ROTATE_90) {
+            transform = transform.rotate(Rotation::R90);
+        }
+        if r.contains(XcbT::ROTATE_180) {
+            transform = transform.rotate(Rotation::R180);
+        }
+        if r.contains(XcbT::ROTATE_270) {
+            transform = transform.rotate(Rotation::R270);
+        }
+        transform
+    }
+}
+impl From<Transform> for xcb::randr::Rotation {
+    fn from(t: Transform) -> xcb::randr::Rotation {
+        // The definition of xcb's transform has the same order as ours (reflect then rotation).
+        // So we just need to translate the flags.
+        use xcb::randr::Rotation as XcbT;
+        let xcb_rotation = match t.rotation {
+            Rotation::R0 => XcbT::ROTATE_0,
+            Rotation::R90 => XcbT::ROTATE_90,
+            Rotation::R180 => XcbT::ROTATE_180,
+            Rotation::R270 => XcbT::ROTATE_270,
+        };
+        if t.reflect {
+            xcb_rotation | XcbT::REFLECT_X
+        } else {
+            xcb_rotation
+        }
+    }
 }

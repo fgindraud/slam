@@ -1,6 +1,8 @@
 use gumdrop::Options;
 use std::path::PathBuf;
 
+mod common;
+
 trait Backend {
     fn wait_for_change(&mut self) -> Result<(), anyhow::Error>;
 }
