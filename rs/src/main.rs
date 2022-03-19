@@ -1,7 +1,7 @@
 use gumdrop::Options;
 use std::path::PathBuf;
 
-mod common;
+mod transform;
 
 trait Backend {
     fn wait_for_change(&mut self) -> Result<(), anyhow::Error>;
@@ -17,7 +17,7 @@ struct DaemonOptions {
     #[options(help = "path to database file (default: <system_config_dir>/slam/database.json)")]
     database: Option<PathBuf>,
 
-    #[options(help = "sets log level: error warn info debug trace")]
+    #[options(help = "sets log level: error warn info debug trace", meta = "LEVEL")]
     log_level: Option<log::Level>,
 }
 
