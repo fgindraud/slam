@@ -1,6 +1,7 @@
 use gumdrop::Options;
 use std::path::PathBuf;
 
+mod geometry;
 mod transform;
 
 trait Backend {
