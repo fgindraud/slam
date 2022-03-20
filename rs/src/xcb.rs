@@ -1,4 +1,4 @@
-use crate::transform::*;
+use crate::geometry::{Rotation, Transform};
 
 pub struct XcbBackend {
     connection: xcb::Connection,
@@ -92,6 +92,7 @@ struct OutputSetState {
     crtcs: Vec<xcb::randr::GetCrtcInfoReply>,
     outputs: Vec<xcb::randr::GetOutputInfoReply>,
 }
+// TODO Edid query + generate Automatic layout
 
 fn query_output_set_state(
     conn: &xcb::Connection,

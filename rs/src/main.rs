@@ -2,7 +2,7 @@ use gumdrop::Options;
 use std::path::PathBuf;
 
 mod geometry;
-mod transform;
+mod layout;
 
 trait Backend {
     fn wait_for_change(&mut self) -> Result<(), anyhow::Error>;
