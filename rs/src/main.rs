@@ -1,13 +1,16 @@
 use gumdrop::Options;
 use std::path::PathBuf;
 
+/// Basic geometric primitives.
 mod geometry;
+/// Output layouts definitions and utils.
 mod layout;
 
 trait Backend {
     fn wait_for_change(&mut self) -> Result<(), anyhow::Error>;
 }
 
+/// X backend
 #[cfg(feature = "xcb")]
 mod xcb;
 

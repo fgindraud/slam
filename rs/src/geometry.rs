@@ -1,5 +1,6 @@
 use std::ops::{Add, Div};
 
+/// Trigonometric orientation (anti-clockwise)
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Rotation {
     R0 = 0,
@@ -107,6 +108,7 @@ fn test_transform() {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+/// Tag for relative positionning of monitor outputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     LeftOf,
@@ -115,6 +117,18 @@ pub enum Direction {
     Under,
 }
 
+impl Direction {
+    fn inverse(&self) -> Direction {
+        match self {
+            Direction::LeftOf => Direction::RightOf,
+            Direction::RightOf => Direction::LeftOf,
+            Direction::Above => Direction::Under,
+            Direction::Under => Direction::Above,
+        }
+    }
+}
+
+/// Pair of integer, used as coordinates / size.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Vec2d {
     pub x: isize,
