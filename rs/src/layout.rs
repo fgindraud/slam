@@ -93,9 +93,10 @@ struct Layout {
 
 // TODO it would be useful to store data for statistical mode, with output names
 // Maybe clone of Layout with enum{Edid,OutputName} ?
+// TODO serialization
 
 impl Layout {
-    fn new(mut outputs: Box<[OutputState]>) -> Layout {
+    pub fn new(mut outputs: Box<[OutputState]>) -> Layout {
         outputs.sort_unstable_by(|lhs, rhs| Ord::cmp(&lhs.id(), &rhs.id()));
         let size = NonZeroUsize::new(outputs.len()).expect("Layout must have one output");
         Layout {
@@ -108,11 +109,15 @@ impl Layout {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+/// Stores directional relations efficiently.
+/// Semantically a `Map<(usize,usize), Option<Direction>>`.
+/// Directions are only stored for `lhs < rhs` and is reversed if necessary, all to avoid redundant data.
+/// Relation of a screen with itself makes no sense, so it is not stored and always evaluate to [`None`].
 #[derive(Debug)]
-struct RelationMatrix {
+pub struct RelationMatrix {
     size: NonZeroUsize,
     /// `size * (size - 1) / 2` relations
-    triangular_array: Box<[Option<Direction>]>,
+    array: Box<[Option<Direction>]>,
 }
 
 impl RelationMatrix {
@@ -121,11 +126,66 @@ impl RelationMatrix {
         let buffer_size = (n * (n - 1)) / 2;
         RelationMatrix {
             size,
-            triangular_array: vec![None; buffer_size].into(),
+            array: vec![None; buffer_size].into(),
         }
     }
 
-    // index (x,y) -> (min,max), linearize to min*(min+1) + max or something
-    // if swap must apply reversion to direction
-    // TODO impl + tests
+    pub fn size(&self) -> NonZeroUsize {
+        self.size
+    }
+
+    /// Compute linearized index for `0 <= low < high < size`.
+    /// Linearized layout : [(0,1),(0-1,2),(0-2,3),(0-3,4),...]
+    fn linearized_index(&self, low: usize, high: usize) -> usize {
+        assert!(low < high, "expected {} < {}", low, high);
+        assert!(high < self.size.get());
+        let high_offset = (high * (high - 1)) / 2; // 0, 1, 3, 6, ...
+        high_offset + low
+    }
+
+    pub fn get(&self, lhs: usize, rhs: usize) -> Option<Direction> {
+        match (lhs, rhs) {
+            (lhs, rhs) if lhs < rhs => self.array[self.linearized_index(lhs, rhs)],
+            (lhs, rhs) if lhs > rhs => {
+                self.array[self.linearized_index(rhs, lhs)].map(|d| d.inverse())
+            }
+            _ => None,
+        }
+    }
+
+    pub fn set(&mut self, lhs: usize, rhs: usize, relation: Option<Direction>) {
+        match (lhs, rhs) {
+            (lhs, rhs) if lhs < rhs => self.array[self.linearized_index(lhs, rhs)] = relation,
+            (lhs, rhs) if lhs > rhs => {
+                self.array[self.linearized_index(rhs, lhs)] = relation.map(|d| d.inverse())
+            }
+            _ => (),
+        }
+    }
+
+    // TODO serialization : just store linearized buffer, infer size with sqrt()
+}
+
+#[cfg(test)]
+#[test]
+fn test_relation_map() {
+    let size = 10;
+    let mut matrix = RelationMatrix::new(NonZeroUsize::new(size).unwrap());
+    // Check linearization
+    {
+        let mut manual_offset = 0;
+        for n in 1..size {
+            for m in 0..n {
+                assert_eq!(matrix.linearized_index(m, n), manual_offset);
+                manual_offset += 1;
+            }
+        }
+        assert_eq!(manual_offset, matrix.array.len())
+    }
+    // Sanity check for store/load logic
+    matrix.set(2, 3, Some(Direction::LeftOf));
+    assert_eq!(matrix.get(2, 3), Some(Direction::LeftOf));
+    assert_eq!(matrix.get(3, 2), Some(Direction::RightOf));
+    matrix.set(3, 2, Some(Direction::Above));
+    assert_eq!(matrix.get(2, 3), Some(Direction::Under));
 }
