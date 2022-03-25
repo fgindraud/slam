@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 /// Bytes 8 to 15 of EDID header, containing manufacturer id + serial number.
 /// This should be sufficient for unique identification of a display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct Edid([u8; 8]);
+pub struct Edid([u8; 8]);
 
 /// Build from raw full EDID data.
 impl<'a> TryFrom<&'a [u8]> for Edid {
@@ -113,6 +113,7 @@ impl Layout {
 /// Semantically a `Map<(usize,usize), Option<Direction>>`.
 /// Directions are only stored for `lhs < rhs` and is reversed if necessary, all to avoid redundant data.
 /// Relation of a screen with itself makes no sense, so it is not stored and always evaluate to [`None`].
+/// Invalid indexes will trigger a [`panic!`].
 #[derive(Debug)]
 pub struct RelationMatrix {
     size: NonZeroUsize,
@@ -135,7 +136,7 @@ impl RelationMatrix {
     }
 
     /// Compute linearized index for `0 <= low < high < size`.
-    /// Linearized layout : [(0,1),(0-1,2),(0-2,3),(0-3,4),...]
+    /// Linearized layout : `[(0,1),(0-1,2),(0-2,3),(0-3,4),...]`.
     fn linearized_index(&self, low: usize, high: usize) -> usize {
         assert!(low < high, "expected {} < {}", low, high);
         assert!(high < self.size.get());

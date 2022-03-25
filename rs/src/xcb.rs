@@ -1,4 +1,5 @@
 use crate::geometry::{Rotation, Transform};
+use crate::layout::Edid;
 
 pub struct XcbBackend {
     connection: xcb::Connection,
@@ -19,19 +20,31 @@ impl XcbBackend {
             screen.root()
         };
 
-        let output_set_state = query_output_set_state(&connection, root_window)?;
-
-        dbg!(&output_set_state.outputs);
-
         // Register for randr events
-        let cookie = connection.send_request_checked(&xcb::randr::SelectInput {
+        connection.send_and_check_request(&xcb::randr::SelectInput {
             window: root_window,
             enable: xcb::randr::NotifyMask::SCREEN_CHANGE
                 | xcb::randr::NotifyMask::CRTC_CHANGE
                 | xcb::randr::NotifyMask::OUTPUT_CHANGE
                 | xcb::randr::NotifyMask::OUTPUT_PROPERTY,
-        });
-        connection.check_request(cookie)?;
+        })?;
+
+        let edid_atom = {
+            let cookie = connection.send_request(&xcb::x::InternAtom {
+                only_if_exists: true,
+                name: b"EDID",
+            });
+            let reply = connection.wait_for_reply(cookie)?;
+            match reply.atom() {
+                xcb::x::ATOM_NONE => {
+                    return Err(anyhow::Error::msg("Edid not defined by X server"))
+                }
+                atom => atom,
+            }
+        };
+
+        let output_set_state = query_output_set_state(&connection, root_window, edid_atom)?;
+        dbg!(&output_set_state.outputs);
 
         Ok(XcbBackend {
             connection,
@@ -61,42 +74,32 @@ impl super::Backend for XcbBackend {
 fn check_randr_event(event: xcb::Event) -> bool {
     match event {
         xcb::Event::RandR(e) => {
-            use xcb::Xid;
-            match e {
-                xcb::randr::Event::ScreenChangeNotify(e) => (),
-                xcb::randr::Event::Notify(e) => match e.u() {
-                    xcb::randr::NotifyData::Oc(e) => {
-                        log::debug!(
-                            "[event] OutputChange[{}] = {:?} {:?} crtc {}",
-                            Xid::resource_id(&e.output()),
-                            e.connection(),
-                            Transform::from(e.rotation()),
-                            Xid::resource_id(&e.crtc())
-                        )
-                    }
-                    xcb::randr::NotifyData::Op(e) => {
-                        log::debug!("[event] OutputProperty[{}]", Xid::resource_id(&e.output()))
-                    }
-                    _ => (),
-                },
-            }
+            log::debug!("[event] {:?}", e);
             true
         }
         _ => false,
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
 #[derive(Debug)]
 struct OutputSetState {
     screen_ressources: xcb::randr::GetScreenResourcesReply,
     crtcs: Vec<xcb::randr::GetCrtcInfoReply>,
-    outputs: Vec<xcb::randr::GetOutputInfoReply>,
+    outputs: Vec<OutputInfo>,
 }
-// TODO Edid query + generate Automatic layout
+#[derive(Debug)]
+struct OutputInfo {
+    xcb_info: xcb::randr::GetOutputInfoReply,
+    name: String,
+    edid: Option<Edid>,
+}
 
 fn query_output_set_state(
     conn: &xcb::Connection,
     root_window: xcb::x::Window,
+    edid_atom: xcb::x::Atom,
 ) -> Result<OutputSetState, xcb::Error> {
     let screen_ressources =
         conn.wait_for_reply(conn.send_request(&xcb::randr::GetScreenResources {
@@ -104,36 +107,73 @@ fn query_output_set_state(
         }))?;
     let config_timestamp = screen_ressources.config_timestamp();
 
-    let crtc_requests: Vec<xcb::randr::GetCrtcInfoCookie> = screen_ressources
+    let crtc_requests: Vec<_> = screen_ressources
         .crtcs()
         .iter()
-        .cloned()
-        .map(|crtc| {
+        .map(|&crtc| {
             conn.send_request(&xcb::randr::GetCrtcInfo {
                 crtc,
                 config_timestamp,
             })
         })
         .collect();
-    let output_requests: Vec<xcb::randr::GetOutputInfoCookie> = screen_ressources
+    let output_requests: Vec<_> = screen_ressources
         .outputs()
         .iter()
-        .cloned()
-        .map(|output| {
-            conn.send_request(&xcb::randr::GetOutputInfo {
-                output,
-                config_timestamp,
-            })
+        .map(|&output| {
+            (
+                conn.send_request(&xcb::randr::GetOutputInfo {
+                    output,
+                    config_timestamp,
+                }),
+                conn.send_request(&xcb::randr::GetOutputProperty {
+                    output,
+                    property: edid_atom,
+                    r#type: xcb::x::GETPROPERTYTYPE_ANY,
+                    long_offset: 0,
+                    long_length: 128, // No need for more than 128 bytes
+                    delete: false,
+                    pending: false,
+                }),
+            )
         })
         .collect();
+
     let crtcs = crtc_requests
         .into_iter()
         .map(|request| conn.wait_for_reply(request))
         .collect::<Result<Vec<_>, _>>()?;
     let outputs = output_requests
         .into_iter()
-        .map(|request| conn.wait_for_reply(request))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|(output_request, edid_request)| -> Result<_, xcb::Error> {
+            let output_info = conn.wait_for_reply(output_request)?;
+            let edid_reply = conn.wait_for_reply(edid_request)?;
+            let name = String::from_utf8_lossy(output_info.name()).to_string();
+            let edid = match edid_reply.r#type() {
+                xcb::x::ATOM_INTEGER => match Edid::try_from(edid_reply.data()) {
+                    Ok(edid) => Some(edid),
+                    Err(e) => {
+                        log::debug!("output {}: {}", name, e);
+                        None
+                    }
+                },
+                xcb::x::ATOM_NONE => None,
+                atom => {
+                    log::debug!(
+                        "output {}: unexpected atom type for Edid reply: {:?}",
+                        name,
+                        atom
+                    );
+                    None
+                }
+            };
+            Ok(OutputInfo {
+                xcb_info: output_info,
+                name,
+                edid,
+            })
+        })
+        .collect::<Result<Vec<_>, xcb::Error>>()?;
 
     Ok(OutputSetState {
         screen_ressources,
@@ -141,6 +181,12 @@ fn query_output_set_state(
         outputs,
     })
 }
+
+///////////////////////////////////////////////////////////////////////////////
+
+// TODO generate Automatic layout
+
+///////////////////////////////////////////////////////////////////////////////
 
 // xcb Rotation : apply reflect_x/y then a rotation. Stored as bitmask.
 impl From<xcb::randr::Rotation> for Transform {
@@ -168,6 +214,7 @@ impl From<xcb::randr::Rotation> for Transform {
         transform
     }
 }
+
 impl From<Transform> for xcb::randr::Rotation {
     fn from(t: Transform) -> xcb::randr::Rotation {
         // The definition of xcb's transform has the same order as ours (reflect then rotation).
