@@ -1,5 +1,6 @@
 use crate::geometry::{Rotation, Transform};
 use crate::layout::Edid;
+use std::collections::HashMap;
 
 pub struct XcbBackend {
     connection: xcb::Connection,
@@ -56,6 +57,8 @@ impl XcbBackend {
 
 impl super::Backend for XcbBackend {
     fn wait_for_change(&mut self) -> Result<(), anyhow::Error> {
+        // Wait for any randr event, then reload entire randr state.
+        // Easier than patching state with notify event data.
         loop {
             let mut had_randr_event = false;
             let event = self.connection.wait_for_event()?;
@@ -85,13 +88,13 @@ fn check_randr_event(event: xcb::Event) -> bool {
 
 #[derive(Debug)]
 struct OutputSetState {
-    screen_ressources: xcb::randr::GetScreenResourcesReply,
-    crtcs: Vec<xcb::randr::GetCrtcInfoReply>,
-    outputs: Vec<OutputInfo>,
+    ressources: xcb::randr::GetScreenResourcesReply,
+    crtcs: HashMap<xcb::randr::Crtc, xcb::randr::GetCrtcInfoReply>,
+    outputs: HashMap<xcb::randr::Output, OutputState>,
 }
 #[derive(Debug)]
-struct OutputInfo {
-    xcb_info: xcb::randr::GetOutputInfoReply,
+struct OutputState {
+    info: xcb::randr::GetOutputInfoReply,
     name: String,
     edid: Option<Edid>,
 }
@@ -100,83 +103,103 @@ fn query_output_set_state(
     conn: &xcb::Connection,
     root_window: xcb::x::Window,
     edid_atom: xcb::x::Atom,
-) -> Result<OutputSetState, xcb::Error> {
-    let screen_ressources =
-        conn.wait_for_reply(conn.send_request(&xcb::randr::GetScreenResources {
-            window: root_window,
-        }))?;
-    let config_timestamp = screen_ressources.config_timestamp();
+) -> Result<OutputSetState, anyhow::Error> {
+    // Some replies have an additional status field.
+    // These bad status codes never happened in the read state part so treat them as errors.
+    fn check_status(status: xcb::randr::SetConfig) -> Result<(), anyhow::Error> {
+        use xcb::randr::SetConfig::*;
+        match status {
+            Success => Ok(()),
+            InvalidConfigTime => Err(anyhow::Error::msg("SetConfig::InvalidConfigTime")),
+            InvalidTime => Err(anyhow::Error::msg("SetConfig::InvalidTime")),
+            Failed => Err(anyhow::Error::msg("SetConfig::Failed")),
+        }
+    }
 
-    let crtc_requests: Vec<_> = screen_ressources
-        .crtcs()
-        .iter()
-        .map(|&crtc| {
-            conn.send_request(&xcb::randr::GetCrtcInfo {
-                crtc,
-                config_timestamp,
-            })
-        })
-        .collect();
-    let output_requests: Vec<_> = screen_ressources
-        .outputs()
-        .iter()
-        .map(|&output| {
-            (
-                conn.send_request(&xcb::randr::GetOutputInfo {
-                    output,
-                    config_timestamp,
-                }),
-                conn.send_request(&xcb::randr::GetOutputProperty {
-                    output,
-                    property: edid_atom,
-                    r#type: xcb::x::GETPROPERTYTYPE_ANY,
-                    long_offset: 0,
-                    long_length: 128, // No need for more than 128 bytes
-                    delete: false,
-                    pending: false,
-                }),
-            )
-        })
-        .collect();
+    // Screen ressources must be done first, as it gives timestamps and output/crtc ids required for other requests.
+    let ressources_req = conn.send_request(&xcb::randr::GetScreenResources {
+        window: root_window,
+    });
+    let ressources = conn.wait_for_reply(ressources_req)?;
+    let config_timestamp = ressources.config_timestamp();
 
-    let crtcs = crtc_requests
-        .into_iter()
-        .map(|request| conn.wait_for_reply(request))
-        .collect::<Result<Vec<_>, _>>()?;
-    let outputs = output_requests
-        .into_iter()
-        .map(|(output_request, edid_request)| -> Result<_, xcb::Error> {
-            let output_info = conn.wait_for_reply(output_request)?;
-            let edid_reply = conn.wait_for_reply(edid_request)?;
-            let name = String::from_utf8_lossy(output_info.name()).to_string();
-            let edid = match edid_reply.r#type() {
-                xcb::x::ATOM_INTEGER => match Edid::try_from(edid_reply.data()) {
-                    Ok(edid) => Some(edid),
-                    Err(e) => {
-                        log::debug!("output {}: {}", name, e);
-                        None
-                    }
-                },
-                xcb::x::ATOM_NONE => None,
-                atom => {
-                    log::debug!(
-                        "output {}: unexpected atom type for Edid reply: {:?}",
-                        name,
-                        atom
-                    );
+    // Request info from all Crtc and outputs in parallel.
+    let make_crtc_request = |&crtc| {
+        let req = conn.send_request(&xcb::randr::GetCrtcInfo {
+            crtc,
+            config_timestamp,
+        });
+        (crtc, req)
+    };
+    let process_crtc_reply = |(crtc, request)| -> Result<_, anyhow::Error> {
+        let reply: xcb::randr::GetCrtcInfoReply = conn.wait_for_reply(request)?;
+        check_status(reply.status())?;
+        Ok((crtc, reply))
+    };
+
+    let make_output_requests = |&output| {
+        let info_req = conn.send_request(&xcb::randr::GetOutputInfo {
+            output,
+            config_timestamp,
+        });
+        let edid_req = conn.send_request(&xcb::randr::GetOutputProperty {
+            output,
+            property: edid_atom,
+            r#type: xcb::x::GETPROPERTYTYPE_ANY,
+            long_offset: 0,
+            long_length: 128, // No need for more than 128 bytes
+            delete: false,
+            pending: false,
+        });
+        (output, info_req, edid_req)
+    };
+    let process_output_replies = |(output, info_req, edid_req)| -> Result<_, anyhow::Error> {
+        let info: xcb::randr::GetOutputInfoReply = conn.wait_for_reply(info_req)?;
+        check_status(info.status())?;
+        let name = String::from_utf8_lossy(info.name()).to_string();
+        let edid_reply: xcb::randr::GetOutputPropertyReply = conn.wait_for_reply(edid_req)?;
+        let edid = match edid_reply.r#type() {
+            xcb::x::ATOM_INTEGER => match Edid::try_from(edid_reply.data()) {
+                Ok(edid) => Some(edid),
+                Err(e) => {
+                    log::debug!("{}: {}", name, e);
                     None
                 }
-            };
-            Ok(OutputInfo {
-                xcb_info: output_info,
-                name,
-                edid,
-            })
-        })
-        .collect::<Result<Vec<_>, xcb::Error>>()?;
+            },
+            xcb::x::ATOM_NONE => None,
+            atom => {
+                let atom_name_req = conn.send_request(&xcb::x::GetAtomName { atom });
+                let atom_name_reply = conn.wait_for_reply(atom_name_req)?;
+                let atom_name = atom_name_reply.name();
+                log::debug!("{}: unexpected type for Edid: {}", name, atom_name);
+                None
+            }
+        };
+        let state = OutputState { info, name, edid };
+        Ok((output, state))
+    };
+
+    let crtc_requests = ressources
+        .crtcs()
+        .iter()
+        .map(make_crtc_request)
+        .collect::<Vec<_>>();
+    let output_requests = ressources
+        .outputs()
+        .iter()
+        .map(make_output_requests)
+        .collect::<Vec<_>>();
+    let crtcs = crtc_requests
+        .into_iter()
+        .map(process_crtc_reply)
+        .collect::<Result<HashMap<_, _>, anyhow::Error>>()?;
+    let outputs = output_requests
+        .into_iter()
+        .map(process_output_replies)
+        .collect::<Result<HashMap<_, _>, anyhow::Error>>()?;
 
     Ok(OutputSetState {
-        screen_ressources,
+        ressources,
         crtcs,
         outputs,
     })
