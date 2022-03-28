@@ -162,6 +162,16 @@ impl Div<isize> for Vec2d {
     }
 }
 
+impl Vec2d {
+    /// Component-wise max.
+    fn cwise_max(self, rhs: Vec2d) -> Vec2d {
+        Vec2d {
+            x: std::cmp::max(self.x, rhs.x),
+            y: std::cmp::max(self.y, rhs.y),
+        }
+    }
+}
+
 /// `x` axis is from left to right. `y` axis is from bottom to top.
 /// The rectangle covers pixels in `[bl.x, bl.x+size.x[ X [bl.y, bl.y+size.y[`.
 /// Top and right sides are excluded.
@@ -196,11 +206,11 @@ impl Rect {
 }
 
 /// Determine if `lhs` is adjacent to `rhs`, and in which direction (`lhs direction rhs`).
-/// Current criterion : adjacent == touching on one side with at least 1 pixel of frontier.
+/// Current criterion : adjacent == touching on one side with an overlap at least half the size of the smallest rect.
 pub fn get_adjacent_direction(lhs: &Rect, rhs: &Rect) -> Option<Direction> {
-    let size_average = (lhs.size + rhs.size) / 2;
-    let is_adjacent_x = |l: Vec2d, r: Vec2d| l.x == r.x && (l.y - r.y).abs() <= size_average.y;
-    let is_adjacent_y = |l: Vec2d, r: Vec2d| l.y == r.y && (l.x - r.x).abs() <= size_average.x;
+    let size_max = Vec2d::cwise_max(lhs.size, rhs.size);
+    let is_adjacent_x = |l: Vec2d, r: Vec2d| l.x == r.x && 2 * (l.y - r.y).abs() <= size_max.y;
+    let is_adjacent_y = |l: Vec2d, r: Vec2d| l.y == r.y && 2 * (l.x - r.x).abs() <= size_max.x;
     if is_adjacent_x(lhs.center_right(), rhs.center_left()) {
         return Some(Direction::LeftOf);
     }
