@@ -33,7 +33,7 @@ impl<'a> TryFrom<&'a [u8]> for Edid {
 /// - with [`Edid`] as an index : orientation and specific [`Mode`].
 /// - fallback using output name, and do not store mode as we cannot differentiate monitors.
 #[derive(Debug)]
-enum OutputState {
+pub enum OutputState {
     WithEdid {
         edid: Edid,
         state: OutputWithEdidState,
@@ -44,20 +44,20 @@ enum OutputState {
     },
 }
 #[derive(Debug)]
-enum OutputWithEdidState {
+pub enum OutputWithEdidState {
     Disabled,
     Enabled { transform: Transform, mode: Mode },
 }
 #[derive(Debug)]
-enum OutputWithoutEdidState {
+pub enum OutputWithoutEdidState {
     Disabled,
     Enabled { transform: Transform },
 }
 
 #[derive(Debug, Clone)]
-struct Mode {
-    size: Vec2d,
-    frequency: f64, // FIXME
+pub struct Mode {
+    pub size: Vec2d,
+    pub frequency: f64, // FIXME
 }
 
 /// Internal identifier for an output.
@@ -80,7 +80,7 @@ impl OutputState {
 
 /// State of a set of screen outputs and their positionning.
 /// Intended to be stored in the database.
-struct Layout {
+pub struct Layout {
     /// State of all connected outputs. Sorted by [`OutputId`].
     outputs: Box<[OutputState]>,
     /// Table of relations. Accessed by indexes from order in `self.outputs`.

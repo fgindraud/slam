@@ -131,14 +131,16 @@ impl Direction {
 /// Pair of integer, used as coordinates / size.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Vec2d {
-    pub x: isize,
-    pub y: isize,
+    pub x: i32,
+    pub y: i32,
 }
 
-impl From<(isize, isize)> for Vec2d {
-    fn from(pair: (isize, isize)) -> Vec2d {
-        let (x, y) = pair;
-        Vec2d { x, y }
+impl<X: Into<i32>, Y: Into<i32>> From<(X, Y)> for Vec2d {
+    fn from(pair: (X, Y)) -> Vec2d {
+        Vec2d {
+            x: pair.0.into(),
+            y: pair.1.into(),
+        }
     }
 }
 
@@ -148,16 +150,6 @@ impl Add for Vec2d {
         Vec2d {
             x: self.x + rhs.x,
             y: self.y + rhs.y,
-        }
-    }
-}
-
-impl Div<isize> for Vec2d {
-    type Output = Vec2d;
-    fn div(self, d: isize) -> Vec2d {
-        Vec2d {
-            x: self.x / d,
-            y: self.y / d,
         }
     }
 }
