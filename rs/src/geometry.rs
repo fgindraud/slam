@@ -1,4 +1,4 @@
-use std::ops::{Add, Div};
+use std::ops::Add;
 
 /// Trigonometric orientation (anti-clockwise)
 #[derive(Clone, Copy, PartialEq, Eq)]

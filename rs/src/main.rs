@@ -1,4 +1,4 @@
-use gumdrop::Options;
+use clap::Parser;
 use std::path::PathBuf;
 
 /// Basic geometric primitives.
@@ -14,19 +14,20 @@ trait Backend {
 #[cfg(feature = "xcb")]
 mod xcb;
 
-#[derive(Debug, Options)]
+#[derive(Debug, Parser)]
+#[clap(version, about)]
 struct DaemonOptions {
-    help: bool,
-
-    #[options(help = "path to database file (default: <system_config_dir>/slam/database.json)")]
+    /// Path to database file (default: <sys_config_dir>/slam/database.json)
+    #[clap(long, parse(from_os_str), value_name = "FILE")]
     database: Option<PathBuf>,
 
-    #[options(help = "sets log level: error warn info debug trace", meta = "LEVEL")]
+    /// Sets log level: error warn info debug trace
+    #[clap(long, value_name = "LEVEL")]
     log_level: Option<log::Level>,
 }
 
 fn main() -> Result<(), anyhow::Error> {
-    let options = DaemonOptions::parse_args_default_or_exit();
+    let options = DaemonOptions::parse();
 
     simple_logger::init_with_level(options.log_level.unwrap_or(log::Level::Warn))?;
 
