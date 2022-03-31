@@ -80,6 +80,7 @@ impl OutputState {
 
 /// State of a set of screen outputs and their positionning.
 /// Intended to be stored in the database.
+#[derive(Debug)]
 pub struct Layout {
     /// State of all connected outputs. Sorted by [`OutputId`].
     outputs: Box<[OutputState]>,
@@ -96,14 +97,14 @@ pub struct Layout {
 // TODO serialization
 
 impl Layout {
-    pub fn new(mut outputs: Box<[OutputState]>) -> Layout {
+    pub fn new(mut outputs: Box<[OutputState]>) -> Result<Layout, &'static str> {
         outputs.sort_unstable_by(|lhs, rhs| Ord::cmp(&lhs.id(), &rhs.id()));
-        let size = NonZeroUsize::new(outputs.len()).expect("Layout must have one output");
-        Layout {
+        let size = NonZeroUsize::new(outputs.len()).ok_or("Layout must have one output")?;
+        Ok(Layout {
             outputs,
             relations: RelationMatrix::new(size),
             primary: None, // FIXME
-        }
+        })
     }
 }
 

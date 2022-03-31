@@ -1,8 +1,19 @@
 use crate::geometry::{Rotation, Transform, Vec2d};
 use crate::layout::{Edid, Layout, Mode};
 use std::collections::HashMap;
+use xcb::Xid;
 
-// Useful documentation : /usr/share/doc/xorgproto/randrproto.txt
+/// Backend for X server, using xcb bindings with randr extension.
+/// Useful documentation : `/usr/share/doc/xorgproto/randrproto.txt`.
+///
+/// Uses the 1.3 and up way to layout multiple outputs.
+/// This consists of mapping _outputs_ to viewports on the rectangle _screen_.
+/// These outputs are mapped through _crtc_ that set _modeinfo_ and rotations.
+///
+/// Things that are not handled and assumed left default :
+/// - homogeneous transform matrix on crtc : cool toy, but handling by window managers is mostly broken.
+/// - rotations at the screen level : legacy, superseeded by current mode.
+/// - any recent provider stuff.
 pub struct XcbBackend {
     connection: xcb::Connection,
     root_window: xcb::x::Window,
@@ -46,7 +57,8 @@ impl XcbBackend {
         };
 
         let output_set_state = OutputSetState::query(&connection, root_window, edid_atom)?;
-        dbg!(&output_set_state.outputs);
+        let layout = convert_to_layout(&output_set_state).unwrap();
+        dbg!(layout);
 
         Ok(XcbBackend {
             connection,
@@ -206,6 +218,17 @@ impl OutputSetState {
             outputs,
         })
     }
+
+    fn mode(&self, id: xcb::randr::Mode) -> Option<Mode> {
+        if id.is_none() {
+            return None;
+        }
+        self.ressources
+            .modes()
+            .into_iter()
+            .find(|m| m.id == id.resource_id())
+            .map(|m| Mode::from(m))
+    }
 }
 
 impl OutputState {
@@ -222,23 +245,41 @@ impl OutputState {
 // TODO generate Automatic layout
 
 fn convert_to_layout(output_states: &OutputSetState) -> Option<Layout> {
-    use crate::layout;
+    use crate::layout::{OutputState, OutputWithEdidState, OutputWithoutEdidState};
     let layout_outputs = output_states
         .outputs
         .iter()
         .filter(|(_output, state)| state.is_connected())
-        .map(|(output, state)| match state.edid {
-            Some(edid) => layout::OutputState::WithEdid {
-                edid,
-                state: todo!(),
-            },
-            None => layout::OutputState::WithoutEdid {
-                name: state.name.clone(),
-                state: todo!(),
-            },
+        .map(|(_output, state)| {
+            let maybe_transform_and_mode = match output_states.crtcs.get(&state.info.crtc()) {
+                Some(crtc_info) => match output_states.mode(crtc_info.mode()) {
+                    Some(mode) => Some((Transform::from(crtc_info.rotation()), mode)),
+                    None => None,
+                },
+                None => None,
+            };
+            match state.edid {
+                Some(edid) => OutputState::WithEdid {
+                    edid,
+                    state: match maybe_transform_and_mode {
+                        Some((transform, mode)) => OutputWithEdidState::Enabled { transform, mode },
+                        None => OutputWithEdidState::Disabled,
+                    },
+                },
+                None => OutputState::WithoutEdid {
+                    name: state.name.clone(),
+                    state: match maybe_transform_and_mode {
+                        Some((transform, _mode)) => OutputWithoutEdidState::Enabled { transform },
+                        None => OutputWithoutEdidState::Disabled,
+                    },
+                },
+            }
         })
         .collect::<Vec<_>>();
-    todo!()
+    let mut layout = Layout::new(layout_outputs.into_boxed_slice()).ok()?;
+    // TODO determine relations. Compute rects beforehand.
+    // Also reject any overlap ; covers both clones and weird layouts.
+    Some(layout)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -289,8 +330,8 @@ impl From<Transform> for xcb::randr::Rotation {
     }
 }
 
-impl From<xcb::randr::ModeInfo> for Mode {
-    fn from(xcb_mode: xcb::randr::ModeInfo) -> Mode {
+impl From<&'_ xcb::randr::ModeInfo> for Mode {
+    fn from(xcb_mode: &'_ xcb::randr::ModeInfo) -> Mode {
         let size = Vec2d::from((xcb_mode.width, xcb_mode.height));
         let dots = u32::from(xcb_mode.htotal) * u32::from(xcb_mode.vtotal);
         assert_ne!(dots, 0, "invalid xcb::ModeInfo");
