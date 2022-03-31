@@ -5,8 +5,14 @@ use std::num::NonZeroUsize;
 
 /// Bytes 8 to 15 of EDID header, containing manufacturer id + serial number.
 /// This should be sufficient for unique identification of a display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Edid([u8; 8]);
+
+impl std::fmt::Debug for Edid {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Edid({:#016x})", u64::from_be_bytes(self.0))
+    }
+}
 
 /// Build from raw full EDID data.
 impl<'a> TryFrom<&'a [u8]> for Edid {
