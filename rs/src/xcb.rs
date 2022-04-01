@@ -240,27 +240,16 @@ fn convert_to_layout(output_states: &OutputSetState) -> Option<Layout> {
         };
         Some((transform, valid_mode, rect))
     };
-    let disabled_outputs = Vec::from_iter(
-        output_states
-            .outputs
-            .iter()
-            .filter(|(_id, state)| state.is_connected())
-            .filter_map(
-                |(_id, state)| match get_transform_mode_rect_if_enabled(state) {
-                    Some(_) => None,
-                    None => Some(match state.edid {
-                        Some(edid) => OutputId::Edid(edid),
-                        None => OutputId::Name(state.name.clone()),
-                    }),
-                },
-            ),
-    );
-    let enabled_output_and_rects = output_states
+    let mut disabled_outputs = Vec::new();
+    let mut enabled_output_and_rects = Vec::new();
+    for state in output_states
         .outputs
         .iter()
-        .filter(|(_id, state)| state.is_connected())
-        .filter_map(|(_id, state)| {
-            get_transform_mode_rect_if_enabled(state).map(|(transform, mode, rect)| {
+        .map(|(_, state)| state)
+        .filter(|state| state.is_connected())
+    {
+        match get_transform_mode_rect_if_enabled(state) {
+            Some((transform, mode, rect)) => {
                 let output = match state.edid {
                     Some(edid) => EnabledOutput::Edid {
                         edid,
@@ -272,12 +261,20 @@ fn convert_to_layout(output_states: &OutputSetState) -> Option<Layout> {
                         transform,
                     },
                 };
-                (output, rect)
-            })
-        });
+                enabled_output_and_rects.push((output, rect))
+            }
+            None => {
+                let id = match state.edid {
+                    Some(edid) => OutputId::Edid(edid),
+                    None => OutputId::Name(state.name.clone()),
+                };
+                disabled_outputs.push(id)
+            }
+        }
+    }
     Layout::from_output_and_rects(
         Vec::into_boxed_slice(disabled_outputs),
-        enabled_output_and_rects,
+        enabled_output_and_rects.into_iter(),
     )
     .ok()
 }
