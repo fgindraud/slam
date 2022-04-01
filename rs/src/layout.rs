@@ -1,4 +1,4 @@
-use crate::geometry::{Direction, Transform, Vec2d};
+use crate::geometry::{Direction, Rect, Transform, Vec2d};
 use std::num::NonZeroUsize;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -103,14 +103,21 @@ pub struct Layout {
 // TODO serialization
 
 impl Layout {
-    pub fn new(mut outputs: Box<[OutputState]>) -> Result<Layout, &'static str> {
-        outputs.sort_unstable_by(|lhs, rhs| Ord::cmp(&lhs.id(), &rhs.id()));
-        let size = NonZeroUsize::new(outputs.len()).ok_or("Layout must have one output")?;
-        Ok(Layout {
-            outputs,
+    pub fn from_state_and_rects(
+        mut output_state_and_rects: Vec<(OutputState, Option<Rect>)>,
+    ) -> Result<Layout, &'static str> {
+        output_state_and_rects.sort_unstable_by(|lhs, rhs| Ord::cmp(&lhs.0.id(), &rhs.0.id()));
+        let size =
+            NonZeroUsize::new(output_state_and_rects.len()).ok_or("Layout must have one output")?;
+        let (sorted_output_states, _sorted_rects): (Vec<_>, Vec<_>) =
+            output_state_and_rects.into_iter().unzip();
+        let mut layout = Layout {
+            outputs: sorted_output_states.into_boxed_slice(),
             relations: RelationMatrix::new(size),
             primary: None, // FIXME
-        })
+        };
+        // TODO determine relations. Also reject any overlap ; covers both clones and weird layouts.
+        Ok(layout)
     }
 }
 

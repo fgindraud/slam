@@ -1,4 +1,4 @@
-use crate::geometry::{Rotation, Transform, Vec2d};
+use crate::geometry::{Rect, Rotation, Transform, Vec2d};
 use crate::layout::{Edid, Layout, Mode};
 use std::collections::HashMap;
 use xcb::Xid;
@@ -219,7 +219,7 @@ impl OutputSetState {
         })
     }
 
-    fn mode(&self, id: xcb::randr::Mode) -> Option<Mode> {
+    fn mode_from_id(&self, id: xcb::randr::Mode) -> Option<Mode> {
         if id.is_none() {
             return None;
         }
@@ -242,44 +242,51 @@ impl OutputState {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-// TODO generate Automatic layout
-
 fn convert_to_layout(output_states: &OutputSetState) -> Option<Layout> {
-    use crate::layout::{OutputState, OutputWithEdidState, OutputWithoutEdidState};
-    let layout_outputs = output_states
+    // Get output information after checking that it is properly enabled (crtc + mode).
+    let get_transform_mode_rect_if_enabled = |xcb_state: &OutputState| -> Option<_> {
+        let assigned_crtc = output_states.crtcs.get(&xcb_state.info.crtc())?;
+        let valid_mode = output_states.mode_from_id(assigned_crtc.mode())?;
+        let transform = Transform::from(assigned_crtc.rotation());
+        let rect = Rect {
+            bottom_left: Vec2d::from((assigned_crtc.x(), assigned_crtc.y())),
+            size: valid_mode.size,
+        };
+        Some(((transform, valid_mode), rect))
+    };
+    // FIXME replace with Option::unzip when stabilised.
+    let unzip = |opt_pair| match opt_pair {
+        Some((a, b)) => (Some(a), Some(b)),
+        None => (None, None),
+    };
+    // Convert states to layout format + rects for layout computation.
+    let connected_output_states_and_rects = output_states
         .outputs
         .iter()
-        .filter(|(_output, state)| state.is_connected())
-        .map(|(_output, state)| {
-            let maybe_transform_and_mode = match output_states.crtcs.get(&state.info.crtc()) {
-                Some(crtc_info) => match output_states.mode(crtc_info.mode()) {
-                    Some(mode) => Some((Transform::from(crtc_info.rotation()), mode)),
-                    None => None,
-                },
-                None => None,
-            };
-            match state.edid {
+        .filter(|(_id, state)| state.is_connected())
+        .map(|(_id, state)| {
+            use crate::layout::{OutputState, OutputWithEdidState, OutputWithoutEdidState};
+            let (transform_mode, rect) = unzip(get_transform_mode_rect_if_enabled(state));
+            let converted_output_state = match state.edid {
                 Some(edid) => OutputState::WithEdid {
                     edid,
-                    state: match maybe_transform_and_mode {
-                        Some((transform, mode)) => OutputWithEdidState::Enabled { transform, mode },
+                    state: match transform_mode {
                         None => OutputWithEdidState::Disabled,
+                        Some((transform, mode)) => OutputWithEdidState::Enabled { transform, mode },
                     },
                 },
                 None => OutputState::WithoutEdid {
                     name: state.name.clone(),
-                    state: match maybe_transform_and_mode {
-                        Some((transform, _mode)) => OutputWithoutEdidState::Enabled { transform },
+                    state: match transform_mode {
                         None => OutputWithoutEdidState::Disabled,
+                        Some((transform, _)) => OutputWithoutEdidState::Enabled { transform },
                     },
                 },
-            }
+            };
+            (converted_output_state, rect)
         })
-        .collect::<Vec<_>>();
-    let mut layout = Layout::new(layout_outputs.into_boxed_slice()).ok()?;
-    // TODO determine relations. Compute rects beforehand.
-    // Also reject any overlap ; covers both clones and weird layouts.
-    Some(layout)
+        .collect();
+    Layout::from_state_and_rects(connected_output_states_and_rects).ok()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
