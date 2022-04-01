@@ -34,104 +34,106 @@ impl<'a> TryFrom<&'a [u8]> for Edid {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-/// Stored representation for an output state.
-/// Two modes depending on whether an [`Edid`] is available :
-/// - with [`Edid`] as an index : orientation and specific [`Mode`].
-/// - fallback using output name, and do not store mode as we cannot differentiate monitors.
-#[derive(Debug)]
-pub enum OutputState {
-    WithEdid {
-        edid: Edid,
-        state: OutputWithEdidState,
-    },
-    WithoutEdid {
-        name: String,
-        state: OutputWithoutEdidState,
-    },
-}
-#[derive(Debug)]
-pub enum OutputWithEdidState {
-    Disabled,
-    Enabled { transform: Transform, mode: Mode },
-}
-#[derive(Debug)]
-pub enum OutputWithoutEdidState {
-    Disabled,
-    Enabled { transform: Transform },
-}
-
 #[derive(Debug, Clone)]
 pub struct Mode {
     pub size: Vec2d,
     pub frequency: f64, // FIXME
 }
 
-/// Internal identifier for an output.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum OutputId<'s> {
+/// Identifier for an output : [`Edid`] if available, or the output name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+
+pub enum OutputId {
     Edid(Edid),
-    Name(&'s str),
+    Name(String),
 }
 
-impl OutputState {
-    fn id<'s>(&'s self) -> OutputId<'s> {
-        match self {
-            OutputState::WithEdid { edid, state: _ } => OutputId::Edid(edid.clone()),
-            OutputState::WithoutEdid { name, state: _ } => OutputId::Name(name),
-        }
-    }
+/// State and identification for an enabled output.
+/// Two modes depending on whether an [`Edid`] is available :
+/// - with [`Edid`] as an index : orientation and specific [`Mode`].
+/// - fallback using output name, and do not store mode as we cannot differentiate monitors.
+#[derive(Debug)]
+pub enum EnabledOutput {
+    Edid {
+        edid: Edid,
+        transform: Transform,
+        mode: Mode,
+    },
+    Name {
+        name: String,
+        transform: Transform,
+    },
 }
 
-///////////////////////////////////////////////////////////////////////////////
-
-/// State of a set of screen outputs and their positionning.
+/// State of a set of screen outputs and their relative positionning.
 /// Intended to be stored in the database.
+/// Lists all connected outputs of a system.
+/// At least one output must be enabled.
 #[derive(Debug)]
 pub struct Layout {
-    /// State of all connected outputs. Sorted by [`OutputId`].
-    outputs: Box<[OutputState]>,
-    /// Table of relations. Accessed by indexes from order in `self.outputs`.
-    /// This table requires **stable and reproducible** ordering for outputs.
+    /// Disabled outputs : only list their ids.
+    disabled_outputs: Box<[OutputId]>,
+    /// Enabled output states.
+    enabled_outputs: Box<[EnabledOutput]>,
+    /// Relative positionning of the enabled outputs. Indexed by position of outputs in `enabled_outputs`.
     relations: RelationMatrix,
     /// Primary output if used / supported. Not in Wayland apparently.
     /// Used by some window manager to choose where to place tray icons, etc.
-    /// Index is a reference in `self.outputs`.
-    primary: Option<u32>,
+    /// Index is a reference in `enabled_outputs`.
+    primary: Option<u16>,
 }
-
-// FIXME Layout should be split between enabled and disabled outputs ?
-// relationmap + primary should only concern enabled outputs
 
 // TODO it would be useful to store data for statistical mode, with output names
 // Maybe clone of Layout with enum{Edid,OutputName} ?
 // TODO serialization
 
-impl Layout {
-    pub fn from_state_and_rects(
-        mut output_state_and_rects: Vec<(OutputState, Option<Rect>)>,
-    ) -> Result<Layout, &'static str> {
-        // Sort state and rects as one unit to have matching ordering and indexation.
-        output_state_and_rects.sort_unstable_by(|lhs, rhs| Ord::cmp(&lhs.0.id(), &rhs.0.id()));
+impl EnabledOutput {
+    /// Get matching [`OutputId`].
+    pub fn id(&self) -> OutputId {
+        match self {
+            EnabledOutput::Edid { edid, .. } => OutputId::Edid(edid.clone()),
+            EnabledOutput::Name { name, .. } => OutputId::Name(name.clone()),
+        }
+    }
+}
 
-        let size = output_state_and_rects.len();
-        let mut relations =
-            RelationMatrix::new(NonZeroUsize::new(size).ok_or("Layout must have one output")?);
+impl Layout {
+    pub fn from_output_and_rects(
+        disabled_outputs: Box<[OutputId]>,
+        enabled_output_and_rects: impl Iterator<Item = (EnabledOutput, Rect)>,
+    ) -> Result<Layout, &'static str> {
+        let (enabled_outputs, rects): (Vec<_>, Vec<_>) = enabled_output_and_rects.unzip();
+
+        let size = rects.len();
+        let mut relations = RelationMatrix::new(
+            NonZeroUsize::new(size).ok_or("Layout must have one enabled output")?,
+        );
         for lhs_id in 0..size {
-            let lhs_rect = &output_state_and_rects[lhs_id].1;
+            let lhs_rect = &rects[lhs_id];
             for rhs_id in (lhs_id + 1)..size {
-                let rhs_rect = &output_state_and_rects[rhs_id].1;
+                let rhs_rect = &rects[rhs_id];
                 // TODO reject overlap ; covers both clones and weird layouts
                 // TODO get adjacent directions
                 // TODO check connexity : reject gaps
             }
         }
+
         Ok(Layout {
-            outputs: Vec::into_boxed_slice(
-                output_state_and_rects.into_iter().map(|(o, _)| o).collect(),
-            ),
+            disabled_outputs,
+            enabled_outputs: Vec::into_boxed_slice(enabled_outputs),
             relations,
             primary: None, // FIXME
         })
+    }
+
+    /// Return the list of outputs ids, sorted.
+    pub fn connected_outputs(&self) -> Box<[OutputId]> {
+        let mut v = Vec::from_iter(Iterator::chain(
+            self.disabled_outputs.iter().cloned(),
+            self.enabled_outputs.iter().map(EnabledOutput::id),
+        ));
+        v.sort_unstable();
+        Vec::into_boxed_slice(v)
     }
 }
 

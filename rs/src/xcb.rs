@@ -1,5 +1,5 @@
 use crate::geometry::{Rect, Rotation, Transform, Vec2d};
-use crate::layout::{Edid, Layout, Mode};
+use crate::layout::{Edid, EnabledOutput, Layout, Mode, OutputId};
 use std::collections::HashMap;
 use xcb::Xid;
 
@@ -193,24 +193,10 @@ impl OutputSetState {
             Ok((output, state))
         };
 
-        let crtc_requests = ressources
-            .crtcs()
-            .iter()
-            .map(make_crtc_request)
-            .collect::<Vec<_>>();
-        let output_requests = ressources
-            .outputs()
-            .iter()
-            .map(make_output_requests)
-            .collect::<Vec<_>>();
-        let crtcs = crtc_requests
-            .into_iter()
-            .map(process_crtc_reply)
-            .collect::<Result<HashMap<_, _>, anyhow::Error>>()?;
-        let outputs = output_requests
-            .into_iter()
-            .map(process_output_replies)
-            .collect::<Result<HashMap<_, _>, anyhow::Error>>()?;
+        let crtc_requests = Vec::from_iter(ressources.crtcs().iter().map(make_crtc_request));
+        let output_requests = Vec::from_iter(ressources.outputs().iter().map(make_output_requests));
+        let crtcs = Result::from_iter(crtc_requests.into_iter().map(process_crtc_reply))?;
+        let outputs = Result::from_iter(output_requests.into_iter().map(process_output_replies))?;
 
         Ok(OutputSetState {
             ressources,
@@ -252,41 +238,48 @@ fn convert_to_layout(output_states: &OutputSetState) -> Option<Layout> {
             bottom_left: Vec2d::from((assigned_crtc.x(), assigned_crtc.y())),
             size: valid_mode.size,
         };
-        Some(((transform, valid_mode), rect))
+        Some((transform, valid_mode, rect))
     };
-    // FIXME replace with Option::unzip when stabilised.
-    let unzip = |opt_pair| match opt_pair {
-        Some((a, b)) => (Some(a), Some(b)),
-        None => (None, None),
-    };
-    // Convert states to layout format + rects for layout computation.
-    let connected_output_states_and_rects = output_states
+    let disabled_outputs = Vec::from_iter(
+        output_states
+            .outputs
+            .iter()
+            .filter(|(_id, state)| state.is_connected())
+            .filter_map(
+                |(_id, state)| match get_transform_mode_rect_if_enabled(state) {
+                    Some(_) => None,
+                    None => Some(match state.edid {
+                        Some(edid) => OutputId::Edid(edid),
+                        None => OutputId::Name(state.name.clone()),
+                    }),
+                },
+            ),
+    );
+    let enabled_output_and_rects = output_states
         .outputs
         .iter()
         .filter(|(_id, state)| state.is_connected())
-        .map(|(_id, state)| {
-            use crate::layout::{OutputState, OutputWithEdidState, OutputWithoutEdidState};
-            let (transform_mode, rect) = unzip(get_transform_mode_rect_if_enabled(state));
-            let converted_output_state = match state.edid {
-                Some(edid) => OutputState::WithEdid {
-                    edid,
-                    state: match transform_mode {
-                        None => OutputWithEdidState::Disabled,
-                        Some((transform, mode)) => OutputWithEdidState::Enabled { transform, mode },
+        .filter_map(|(_id, state)| {
+            get_transform_mode_rect_if_enabled(state).map(|(transform, mode, rect)| {
+                let output = match state.edid {
+                    Some(edid) => EnabledOutput::Edid {
+                        edid,
+                        transform,
+                        mode,
                     },
-                },
-                None => OutputState::WithoutEdid {
-                    name: state.name.clone(),
-                    state: match transform_mode {
-                        None => OutputWithoutEdidState::Disabled,
-                        Some((transform, _)) => OutputWithoutEdidState::Enabled { transform },
+                    None => EnabledOutput::Name {
+                        name: state.name.clone(),
+                        transform,
                     },
-                },
-            };
-            (converted_output_state, rect)
-        })
-        .collect();
-    Layout::from_state_and_rects(connected_output_states_and_rects).ok()
+                };
+                (output, rect)
+            })
+        });
+    Layout::from_output_and_rects(
+        Vec::into_boxed_slice(disabled_outputs),
+        enabled_output_and_rects,
+    )
+    .ok()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
