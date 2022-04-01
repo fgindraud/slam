@@ -91,12 +91,16 @@ pub struct Layout {
     /// State of all connected outputs. Sorted by [`OutputId`].
     outputs: Box<[OutputState]>,
     /// Table of relations. Accessed by indexes from order in `self.outputs`.
+    /// This table requires **stable and reproducible** ordering for outputs.
     relations: RelationMatrix,
     /// Primary output if used / supported. Not in Wayland apparently.
     /// Used by some window manager to choose where to place tray icons, etc.
     /// Index is a reference in `self.outputs`.
     primary: Option<u32>,
 }
+
+// FIXME Layout should be split between enabled and disabled outputs ?
+// relationmap + primary should only concern enabled outputs
 
 // TODO it would be useful to store data for statistical mode, with output names
 // Maybe clone of Layout with enum{Edid,OutputName} ?
@@ -106,18 +110,28 @@ impl Layout {
     pub fn from_state_and_rects(
         mut output_state_and_rects: Vec<(OutputState, Option<Rect>)>,
     ) -> Result<Layout, &'static str> {
+        // Sort state and rects as one unit to have matching ordering and indexation.
         output_state_and_rects.sort_unstable_by(|lhs, rhs| Ord::cmp(&lhs.0.id(), &rhs.0.id()));
-        let size =
-            NonZeroUsize::new(output_state_and_rects.len()).ok_or("Layout must have one output")?;
-        let (sorted_output_states, _sorted_rects): (Vec<_>, Vec<_>) =
-            output_state_and_rects.into_iter().unzip();
-        let mut layout = Layout {
-            outputs: sorted_output_states.into_boxed_slice(),
-            relations: RelationMatrix::new(size),
+
+        let size = output_state_and_rects.len();
+        let mut relations =
+            RelationMatrix::new(NonZeroUsize::new(size).ok_or("Layout must have one output")?);
+        for lhs_id in 0..size {
+            let lhs_rect = &output_state_and_rects[lhs_id].1;
+            for rhs_id in (lhs_id + 1)..size {
+                let rhs_rect = &output_state_and_rects[rhs_id].1;
+                // TODO reject overlap ; covers both clones and weird layouts
+                // TODO get adjacent directions
+                // TODO check connexity : reject gaps
+            }
+        }
+        Ok(Layout {
+            outputs: Vec::into_boxed_slice(
+                output_state_and_rects.into_iter().map(|(o, _)| o).collect(),
+            ),
+            relations,
             primary: None, // FIXME
-        };
-        // TODO determine relations. Also reject any overlap ; covers both clones and weird layouts.
-        Ok(layout)
+        })
     }
 }
 

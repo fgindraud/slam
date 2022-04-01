@@ -128,6 +128,8 @@ impl Direction {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
 /// Pair of integer, used as coordinates / size.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Vec2d {
@@ -164,6 +166,8 @@ impl Vec2d {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
 /// `x` axis is from left to right. `y` axis is from bottom to top.
 /// The rectangle covers pixels in `[bl.x, bl.x+size.x[ X [bl.y, bl.y+size.y[`.
 /// Top and right sides are excluded.
@@ -195,27 +199,73 @@ impl Rect {
     fn center_right(&self) -> Vec2d {
         self.bottom_left + Vec2d::from((self.size.x, self.size.y / 2))
     }
+
+    fn offset(&self, delta: Vec2d) -> Rect {
+        Rect {
+            bottom_left: self.bottom_left + delta,
+            size: self.size,
+        }
+    }
+
+    /// Does `self` overlaps `other` ?
+    pub fn overlaps(&self, other: &Rect) -> bool {
+        // It is easier to determine if there is NO overlap : the other rect must be entirely on one side.
+        let left_of = self.bottom_right().x <= other.bottom_left.x;
+        let right_of = other.bottom_right().x <= self.bottom_left.x;
+        let under = self.top_left().y <= other.bottom_left.y;
+        let above = other.top_left().y <= self.bottom_left.y;
+        let no_overlap = left_of || right_of || under || above;
+        !no_overlap
+    }
+
+    /// Determine if `lhs` is adjacent to `rhs`, and in which direction (`lhs direction rhs`).
+    /// Current criterion : adjacent == touching on one side with an overlap at least half the size of the smallest rect.
+    pub fn adjacent_direction(&self, rhs: &Rect) -> Option<Direction> {
+        let lhs = self;
+        let size_max = Vec2d::cwise_max(lhs.size, rhs.size);
+        let is_adjacent_x = |l: Vec2d, r: Vec2d| l.x == r.x && 2 * (l.y - r.y).abs() <= size_max.y;
+        let is_adjacent_y = |l: Vec2d, r: Vec2d| l.y == r.y && 2 * (l.x - r.x).abs() <= size_max.x;
+        if is_adjacent_x(lhs.center_right(), rhs.center_left()) {
+            return Some(Direction::LeftOf);
+        }
+        if is_adjacent_x(lhs.center_left(), rhs.center_right()) {
+            return Some(Direction::RightOf);
+        }
+        if is_adjacent_y(lhs.center_top(), rhs.center_bottom()) {
+            return Some(Direction::Under);
+        }
+        if is_adjacent_y(lhs.center_bottom(), rhs.center_top()) {
+            return Some(Direction::Above);
+        }
+        None
+    }
 }
 
-/// Determine if `lhs` is adjacent to `rhs`, and in which direction (`lhs direction rhs`).
-/// Current criterion : adjacent == touching on one side with an overlap at least half the size of the smallest rect.
-pub fn get_adjacent_direction(lhs: &Rect, rhs: &Rect) -> Option<Direction> {
-    let size_max = Vec2d::cwise_max(lhs.size, rhs.size);
-    let is_adjacent_x = |l: Vec2d, r: Vec2d| l.x == r.x && 2 * (l.y - r.y).abs() <= size_max.y;
-    let is_adjacent_y = |l: Vec2d, r: Vec2d| l.y == r.y && 2 * (l.x - r.x).abs() <= size_max.x;
-    if is_adjacent_x(lhs.center_right(), rhs.center_left()) {
-        return Some(Direction::LeftOf);
-    }
-    if is_adjacent_x(lhs.center_left(), rhs.center_right()) {
-        return Some(Direction::RightOf);
-    }
-    if is_adjacent_y(lhs.center_top(), rhs.center_bottom()) {
-        return Some(Direction::Under);
-    }
-    if is_adjacent_y(lhs.center_bottom(), rhs.center_top()) {
-        return Some(Direction::Above);
-    }
-    None
+#[cfg(test)]
+#[test]
+fn test_overlaps() {
+    let main = Rect {
+        bottom_left: Vec2d::from((0, 0)),
+        size: Vec2d::from((1920, 1080)),
+    };
+    // Adjacent
+    assert!(!main.overlaps(&main.offset((1920, 0).into())));
+    assert!(!main.overlaps(&main.offset((-1920, 0).into())));
+    assert!(!main.overlaps(&main.offset((0, 1080).into())));
+    assert!(!main.overlaps(&main.offset((0, -1080).into())));
+    // Adjacent to corners
+    assert!(!main.overlaps(&main.offset((1920, 600).into())));
+    assert!(!main.overlaps(&main.offset((1920, 1080).into())));
+    // With gap
+    assert!(!main.overlaps(&main.offset((-2000, 0).into())));
+    assert!(!main.overlaps(&main.offset((2000, 0).into())));
+    assert!(!main.overlaps(&main.offset((0, 1500).into())));
+    // Should overlap
+    assert!(main.overlaps(&main.offset((1919, 0).into())));
+    assert!(main.overlaps(&main.offset((-1919, 0).into())));
+    assert!(main.overlaps(&main.offset((200, 0).into())));
+    assert!(main.overlaps(&main.offset((0, 1079).into())));
+    assert!(main.overlaps(&main))
 }
 
 #[cfg(test)]
@@ -242,27 +292,27 @@ fn test_direction() {
         bottom_left: primary.center_bottom() + Vec2d::from((200, -480)),
         size: Vec2d::from((640, 480)),
     };
-    assert_eq!(get_adjacent_direction(&primary, &primary), None);
+    assert_eq!(Rect::adjacent_direction(&primary, &primary), None);
     assert_eq!(
-        get_adjacent_direction(&primary, &at_right),
+        Rect::adjacent_direction(&primary, &at_right),
         Some(Direction::LeftOf)
     );
     assert_eq!(
-        get_adjacent_direction(&at_right, &primary),
+        Rect::adjacent_direction(&at_right, &primary),
         Some(Direction::RightOf)
     );
-    assert_eq!(get_adjacent_direction(&primary, &right_overlap), None);
+    assert_eq!(Rect::adjacent_direction(&primary, &right_overlap), None);
     assert_eq!(
-        get_adjacent_direction(&primary, &above_middle),
+        Rect::adjacent_direction(&primary, &above_middle),
         Some(Direction::Under)
     );
     assert_eq!(
-        get_adjacent_direction(&at_right, &above_middle),
+        Rect::adjacent_direction(&at_right, &above_middle),
         Some(Direction::Under)
     );
     assert_eq!(
-        get_adjacent_direction(&primary, &smaller_below),
+        Rect::adjacent_direction(&primary, &smaller_below),
         Some(Direction::Above)
     );
-    assert_eq!(get_adjacent_direction(&at_right, &smaller_below), None);
+    assert_eq!(Rect::adjacent_direction(&at_right, &smaller_below), None);
 }
