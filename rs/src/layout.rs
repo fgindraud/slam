@@ -101,21 +101,23 @@ impl Layout {
     pub fn from_output_and_rects(
         disabled_outputs: Box<[OutputId]>,
         enabled_output_and_rects: impl Iterator<Item = (EnabledOutput, Rect)>,
-    ) -> Result<Layout, &'static str> {
+    ) -> Result<Layout, LayoutInferenceError> {
         let (enabled_outputs, rects): (Vec<_>, Vec<_>) = enabled_output_and_rects.unzip();
 
         let size = rects.len();
         let mut relations = RelationMatrix::new(
-            NonZeroUsize::new(size).ok_or("Layout must have one enabled output")?,
+            NonZeroUsize::new(size).ok_or(LayoutInferenceError::NoEnabledOutput)?,
         );
         for lhs_id in 0..size {
             let lhs_rect = &rects[lhs_id];
             for rhs_id in (lhs_id + 1)..size {
                 let rhs_rect = &rects[rhs_id];
-                // TODO reject overlap ; covers both clones and weird layouts
-                // TODO get adjacent directions
-                // TODO check connexity : reject gaps
+                if lhs_rect.overlaps(rhs_rect) {
+                    return Err(LayoutInferenceError::Overlap);
+                }
+                relations.set(lhs_id, rhs_id, Rect::adjacent_direction(lhs_rect, rhs_rect))
             }
+            // TODO check connexity : reject gaps
         }
 
         Ok(Layout {
@@ -135,6 +137,14 @@ impl Layout {
         v.sort_unstable();
         Vec::into_boxed_slice(v)
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum LayoutInferenceError {
+    #[error("no enabled output")]
+    NoEnabledOutput,
+    #[error("some outputs overlap")]
+    Overlap,
 }
 
 ///////////////////////////////////////////////////////////////////////////////
