@@ -117,9 +117,10 @@ impl Layout {
                 }
                 relations.set(lhs_id, rhs_id, Rect::adjacent_direction(lhs_rect, rhs_rect))
             }
-            // TODO check connexity : reject gaps
         }
-
+        if !relations.is_single_connected_component() {
+            return Err(LayoutInferenceError::Gaps);
+        }
         Ok(Layout {
             disabled_outputs,
             enabled_outputs: Vec::into_boxed_slice(enabled_outputs),
@@ -145,6 +146,8 @@ pub enum LayoutInferenceError {
     NoEnabledOutput,
     #[error("some outputs overlap")]
     Overlap,
+    #[error("gaps are present")]
+    Gaps,
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -204,12 +207,41 @@ impl RelationMatrix {
         }
     }
 
+    pub fn is_single_connected_component(&self) -> bool {
+        // Union find structure with indexes : map[0..size] -> 0..size
+        fn get_representative(map: &[usize], i: usize) -> usize {
+            let mut result = i;
+            loop {
+                let repr = map[result];
+                if repr == result {
+                    return result;
+                }
+                result = repr
+            }
+        }
+        let size = self.size.get();
+        let mut representatives = Vec::from_iter(0..size);
+        // Start with all outputs as singular components. Merge them every time there is a relation.
+        for lhs in 0..size {
+            for rhs in (lhs + 1)..size {
+                if self.get(lhs, rhs).is_some() {
+                    // Merge connected components towards min index.
+                    let lhs = get_representative(&representatives, lhs);
+                    let rhs = get_representative(&representatives, rhs);
+                    representatives[std::cmp::max(lhs, rhs)] = std::cmp::min(lhs, rhs)
+                }
+            }
+        }
+        // If all outputs form a single block, the representant of everyone should be 0 (smallest).
+        (0..size).all(|output| get_representative(&representatives, output) == 0)
+    }
+
     // TODO serialization : just store linearized buffer, infer size with sqrt()
 }
 
 #[cfg(test)]
 #[test]
-fn test_relation_map() {
+fn test_relation_matrix_basic() {
     let size = 10;
     let mut matrix = RelationMatrix::new(NonZeroUsize::new(size).unwrap());
     // Check linearization
@@ -228,5 +260,47 @@ fn test_relation_map() {
     assert_eq!(matrix.get(2, 3), Some(Direction::LeftOf));
     assert_eq!(matrix.get(3, 2), Some(Direction::RightOf));
     matrix.set(3, 2, Some(Direction::Above));
-    assert_eq!(matrix.get(2, 3), Some(Direction::Under));
+    assert_eq!(matrix.get(2, 3), Some(Direction::Under))
+}
+
+#[cfg(test)]
+#[test]
+fn test_relation_matrix_connexity() {
+    fn check(n: usize, is_connex: bool, relations: &[(usize, usize)]) {
+        let mut matrix = RelationMatrix::new(NonZeroUsize::new(n).unwrap());
+        for (i, j) in relations {
+            // direction itself does not matter
+            matrix.set(*i, *j, Some(Direction::LeftOf))
+        }
+        assert!(
+            matrix.is_single_connected_component() == is_connex,
+            "case: n={} rels={:?}",
+            n,
+            relations
+        )
+    }
+    check(1, true, &[]);
+
+    check(2, false, &[]);
+    check(2, true, &[(0, 1)]);
+
+    check(3, false, &[]);
+    check(3, false, &[(0, 1)]);
+    check(3, false, &[(0, 2)]);
+    check(3, false, &[(1, 2)]);
+    check(3, true, &[(1, 2), (0, 1)]);
+    check(3, true, &[(0, 2), (0, 1)]);
+    check(3, true, &[(0, 1), (1, 2), (0, 2)]);
+
+    check(4, false, &[(0, 1), (1, 2), (0, 2)]);
+    check(4, false, &[(0, 1), (2, 3)]);
+    check(4, false, &[(0, 2), (1, 3)]);
+    check(4, false, &[(0, 3), (1, 2)]);
+    check(4, true, &[(0, 3), (1, 2), (0, 2)]);
+    check(4, true, &[(0, 1), (1, 2), (2, 3)]);
+    check(4, true, &[(0, 2), (3, 2), (1, 3)]);
+
+    check(5, false, &[(0, 1), (1, 2), (2, 1), (3, 4)]);
+    check(5, true, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+    check(5, true, &[(0, 4), (4, 2), (2, 1), (1, 3)]);
 }
