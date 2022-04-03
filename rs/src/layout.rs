@@ -140,15 +140,24 @@ impl Layout {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum LayoutInferenceError {
-    #[error("no enabled output")]
     NoEnabledOutput,
-    #[error("some outputs overlap")]
     Overlap,
-    #[error("gaps are present")]
     Gaps,
 }
+impl std::fmt::Display for LayoutInferenceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use LayoutInferenceError::*;
+        let s = match self {
+            NoEnabledOutput => "no enabled output",
+            Overlap => "some outputs overlap",
+            Gaps => "output set does not form a connex block",
+        };
+        s.fmt(f)
+    }
+}
+impl std::error::Error for LayoutInferenceError {}
 
 ///////////////////////////////////////////////////////////////////////////////
 

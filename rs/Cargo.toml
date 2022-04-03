@@ -7,7 +7,6 @@ description = "Save multi-screen layouts and restore them when needed"
 
 [dependencies]
 anyhow = "1.0"
-thiserror = "1.0"
 dirs = "4.0" # config dir
 clap = { version = "3.1", features = ["derive"] } # cmd line parsing
 log = "0.4"
