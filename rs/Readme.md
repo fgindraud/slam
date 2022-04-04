@@ -25,8 +25,6 @@ The database is a json file stored in the _XDG_ config directory if the path is 
 Log messages are printed to stdout for simplicity.
 The cleanest way to launch _SLAM_ is as a `systemd` user service dependent on the graphical session (TODO sample file).
 
----------------------------------
-
 Semantics
 ---------
 
@@ -44,7 +42,7 @@ The change from this external tool will be recognized as a _software_ change and
 What is stored :
 * Directional relations between outputs (`left-of`, etc).
 * Rotation and reflection for each output.
-* Mode of each output size+frequency), which must be from the list attached to the output. Defaults to _preferred mode_.
+* Mode of each output (size+frequency), which must be from the list attached to the output. Defaults to _preferred mode_.
 * Primary output for X.
 
 The EDID data may be absent due to video signal forwarding equiment like cheap KVMs often present in conference rooms.
@@ -56,3 +54,4 @@ TODO:
 * strategy for default layout:
     * old statistical thing ? required ISL as it just used the set of most used relations which maybe non-sensical together
     * find base with subset of screens and extend with statistical relation ?
+    
