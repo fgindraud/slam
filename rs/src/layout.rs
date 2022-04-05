@@ -42,10 +42,15 @@ pub struct Mode {
 
 /// Identifier for an output : [`Edid`] if available, or the output name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-
 pub enum OutputId {
     Edid(Edid),
     Name(String),
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub enum OutputIdRef<'a> {
+    Edid(Edid),
+    Name(&'a str),
 }
 
 /// State and identification for an enabled output.
@@ -73,7 +78,7 @@ pub enum EnabledOutput {
 pub struct Layout {
     /// Disabled outputs : only list their ids.
     disabled_outputs: Box<[OutputId]>,
-    /// Enabled output states.
+    /// Enabled output states. Sorted by .
     enabled_outputs: Box<[EnabledOutput]>,
     /// Relative positionning of the enabled outputs. Indexed by position of outputs in `enabled_outputs`.
     relations: RelationMatrix,
@@ -84,7 +89,6 @@ pub struct Layout {
 }
 
 // TODO it would be useful to store data for statistical mode, with output names
-// Maybe clone of Layout with enum{Edid,OutputName} ?
 // TODO serialization
 
 impl EnabledOutput {
@@ -95,15 +99,27 @@ impl EnabledOutput {
             EnabledOutput::Name { name, .. } => OutputId::Name(name.clone()),
         }
     }
+
+    fn id_ref<'a>(&'a self) -> OutputIdRef<'a> {
+        match self {
+            EnabledOutput::Edid { edid, .. } => OutputIdRef::Edid(edid.clone()),
+            EnabledOutput::Name { name, .. } => OutputIdRef::Name(name.as_ref()),
+        }
+    }
 }
 
 impl Layout {
     pub fn from_output_and_rects(
         disabled_outputs: Box<[OutputId]>,
-        enabled_output_and_rects: impl Iterator<Item = (EnabledOutput, Rect)>,
+        enabled_output_and_rects: Vec<(EnabledOutput, Rect)>,
     ) -> Result<Layout, LayoutInferenceError> {
-        let (enabled_outputs, rects): (Vec<_>, Vec<_>) = enabled_output_and_rects.unzip();
-
+        // Sort outputs and rects together then split them
+        let mut enabled_output_and_rects = enabled_output_and_rects;
+        enabled_output_and_rects
+            .sort_unstable_by(|(l, _), (r, _)| std::cmp::Ord::cmp(&l.id_ref(), &r.id_ref()));
+        let (enabled_outputs, rects): (Vec<_>, Vec<_>) =
+            enabled_output_and_rects.into_iter().unzip();
+        // Infer relations and check layout
         let size = rects.len();
         let mut relations = RelationMatrix::new(
             NonZeroUsize::new(size).ok_or(LayoutInferenceError::NoEnabledOutput)?,
@@ -228,7 +244,7 @@ impl RelationMatrix {
                 result = repr
             }
         }
-        let size = self.size.get();
+        let size = self.size().get();
         let mut representatives = Vec::from_iter(0..size);
         // Start with all outputs as singular components. Merge them every time there is a relation.
         for lhs in 0..size {

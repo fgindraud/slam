@@ -274,7 +274,7 @@ fn convert_to_layout(output_states: &OutputSetState) -> Option<Layout> {
     }
     Layout::from_output_and_rects(
         Vec::into_boxed_slice(disabled_outputs),
-        enabled_output_and_rects.into_iter(),
+        enabled_output_and_rects,
     )
     .ok()
 }
