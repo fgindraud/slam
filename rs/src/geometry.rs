@@ -1,4 +1,4 @@
-use std::ops::Add;
+use std::ops::{Add, Sub};
 
 /// Trigonometric orientation (anti-clockwise)
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -156,6 +156,16 @@ impl Add for Vec2d {
     }
 }
 
+impl Sub for Vec2d {
+    type Output = Vec2d;
+    fn sub(self, rhs: Vec2d) -> Vec2d {
+        Vec2d {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+        }
+    }
+}
+
 impl Vec2d {
     /// Component-wise max.
     fn cwise_max(self, rhs: Vec2d) -> Vec2d {
@@ -177,7 +187,7 @@ pub struct Rect {
 }
 
 impl Rect {
-    fn top_right(&self) -> Vec2d {
+    pub fn top_right(&self) -> Vec2d {
         self.bottom_left + self.size
     }
     fn bottom_right(&self) -> Vec2d {
