@@ -130,7 +130,9 @@ impl Direction {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-/// Pair of integer, used as coordinates / size.
+/// Pair of integer, used as coordinates / size. Uses the usual cartesian orientation :
+/// - `x` goes from right to left.
+/// - `y` goes upward.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Vec2d {
     pub x: i32,

@@ -21,7 +21,9 @@ xcb = { version = "1.1", features = ["randr"], optional = true }
 
 
 [dev-dependencies]
-raqote = "0.8.0" # for layout example
+# Drawing for layout examples
+tiny-skia = "0.6.3"
+palette = "0.6.0"
 
 [[example]]
 name = "layout"
