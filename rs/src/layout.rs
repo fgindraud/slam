@@ -109,10 +109,29 @@ impl EnabledOutput {
 }
 
 impl Layout {
+    /// Return the list of outputs ids, sorted.
+    pub fn connected_outputs(&self) -> Box<[OutputId]> {
+        let mut v = Vec::from_iter(Iterator::chain(
+            self.disabled_outputs.iter().cloned(),
+            self.enabled_outputs.iter().map(EnabledOutput::id),
+        ));
+        v.sort_unstable();
+        Vec::into_boxed_slice(v)
+    }
+
+    /// Infer a layout from output coordinates.
     pub fn from_output_and_rects(
         disabled_outputs: Box<[OutputId]>,
         enabled_output_and_rects: Vec<(EnabledOutput, Rect)>,
     ) -> Result<Layout, LayoutInferenceError> {
+        // Detect mode / coordinate mismatch
+        for (output, rect) in enabled_output_and_rects.iter() {
+            if let EnabledOutput::Edid { mode, .. } = output {
+                if mode.size != rect.size {
+                    return Err(LayoutInferenceError::ModeDoesNotMatchSize);
+                }
+            }
+        }
         // Sort outputs and rects together then split them
         let mut enabled_output_and_rects = enabled_output_and_rects;
         enabled_output_and_rects
@@ -144,16 +163,6 @@ impl Layout {
             primary: None, // FIXME
         })
     }
-
-    /// Return the list of outputs ids, sorted.
-    pub fn connected_outputs(&self) -> Box<[OutputId]> {
-        let mut v = Vec::from_iter(Iterator::chain(
-            self.disabled_outputs.iter().cloned(),
-            self.enabled_outputs.iter().map(EnabledOutput::id),
-        ));
-        v.sort_unstable();
-        Vec::into_boxed_slice(v)
-    }
 }
 
 #[derive(Debug)]
@@ -161,6 +170,7 @@ pub enum LayoutInferenceError {
     NoEnabledOutput,
     Overlap,
     Gaps,
+    ModeDoesNotMatchSize,
 }
 impl std::fmt::Display for LayoutInferenceError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -169,6 +179,7 @@ impl std::fmt::Display for LayoutInferenceError {
             NoEnabledOutput => "no enabled output",
             Overlap => "some outputs overlap",
             Gaps => "output set does not form a connex block",
+            ModeDoesNotMatchSize => "output mode size does not match rect size",
         };
         s.fmt(f)
     }
