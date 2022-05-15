@@ -1,4 +1,4 @@
-use crate::geometry::{Direction, Rect, Transform, Vec2d};
+use crate::geometry::{self, Direction, Rect, Transform, Vec2d};
 use std::num::NonZeroUsize;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -78,7 +78,7 @@ pub enum EnabledOutput {
 pub struct Layout {
     /// Disabled outputs : only list their ids.
     disabled_outputs: Box<[OutputId]>,
-    /// Enabled output states. Sorted by .
+    /// Enabled output states.
     enabled_outputs: Box<[EnabledOutput]>,
     /// Relative positionning of the enabled outputs. Indexed by position of outputs in `enabled_outputs`.
     relations: RelationMatrix,
@@ -186,6 +186,59 @@ impl std::fmt::Display for LayoutInferenceError {
 }
 impl std::error::Error for LayoutInferenceError {}
 
+impl Layout {
+    pub fn compute_rects(&self, enabled_output_preferred_modes: &[Mode]) -> Vec<Rect> {
+        use good_lp::{Expression, IntoAffineExpression};
+        let n_outputs = self.enabled_outputs.len();
+        assert!(enabled_output_preferred_modes.len() == n_outputs);
+        // Use preferred mode size when Edid is not available
+        let output_sizes = Vec::from_iter(self.enabled_outputs.iter().enumerate().map(
+            |(i, output)| match output {
+                EnabledOutput::Edid { mode, .. } => mode.size.clone(),
+                EnabledOutput::Name { .. } => enabled_output_preferred_modes[i].size.clone(),
+            },
+        ));
+        // Create affine expressions for base coordinates that will be filled later.
+        let mut coordinates: Vec<Option<(Expression, Expression)>> = vec![None; n_outputs];
+        let mut outputs_to_see = std::collections::VecDeque::with_capacity(n_outputs);
+        let mut relations = self.relations.clone();
+        // Start with biggest screen, at pos (0,0)
+        let biggest_screen = match output_sizes
+            .iter()
+            .enumerate()
+            .max_by_key(|(_i, size)| size.x * size.y)
+        {
+            Some((i, _)) => i,
+            None => unreachable!(),
+        };
+        coordinates[biggest_screen] = Some((Expression::from(0), Expression::from(0)));
+        outputs_to_see.push_back(biggest_screen);
+        //
+        let mut problem = good_lp::ProblemVariables::new();
+        while let Some(left) = outputs_to_see.pop_front() {
+            // Process relations to neighbors
+            for right in 0..n_outputs {
+                if let Some(relation) = relations.get(left, right) {
+                    if let Some(_) = coordinates[right] {
+                        // Already defined coords, add constraints
+                    } else {
+                        // Defined coords for right
+                        let left_coord = coordinates[left].as_ref().unwrap();
+                        let right_coord = match relation {
+                            Direction::LeftOf => (
+                                left_coord.0.clone() + output_sizes[left].x,
+                                problem.add_variable().into_expression(),
+                            ),
+                            _ => todo!(),
+                        };
+                    }
+                }
+            }
+        }
+        Vec::new()
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Stores directional relations efficiently.
@@ -193,7 +246,7 @@ impl std::error::Error for LayoutInferenceError {}
 /// Directions are only stored for `lhs < rhs` and is reversed if necessary, all to avoid redundant data.
 /// Relation of a screen with itself makes no sense, so it is not stored and always evaluate to [`None`].
 /// Invalid indexes will trigger a [`panic!`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RelationMatrix {
     size: NonZeroUsize,
     /// `size * (size - 1) / 2` relations
