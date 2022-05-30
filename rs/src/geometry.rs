@@ -139,12 +139,16 @@ pub struct Vec2d {
     pub y: i32,
 }
 
-impl<X: Into<i32>, Y: Into<i32>> From<(X, Y)> for Vec2d {
-    fn from(pair: (X, Y)) -> Vec2d {
-        Vec2d {
-            x: pair.0.into(),
-            y: pair.1.into(),
-        }
+impl Vec2d {
+    pub fn new(x: i32, y: i32) -> Self {
+        Vec2d { x, y }
+    }
+}
+
+impl From<(i32, i32)> for Vec2d {
+    fn from(pair: (i32, i32)) -> Vec2d {
+        let (x, y) = pair;
+        Vec2d { x, y }
     }
 }
 
@@ -193,23 +197,23 @@ impl Rect {
         self.bottom_left + self.size
     }
     fn bottom_right(&self) -> Vec2d {
-        self.bottom_left + Vec2d::from((self.size.x, 0))
+        self.bottom_left + Vec2d::new(self.size.x, 0)
     }
     fn top_left(&self) -> Vec2d {
-        self.bottom_left + Vec2d::from((0, self.size.y))
+        self.bottom_left + Vec2d::new(0, self.size.y)
     }
 
     fn center_bottom(&self) -> Vec2d {
-        self.bottom_left + Vec2d::from((self.size.x / 2, 0))
+        self.bottom_left + Vec2d::new(self.size.x / 2, 0)
     }
     fn center_top(&self) -> Vec2d {
-        self.bottom_left + Vec2d::from((self.size.x / 2, self.size.y))
+        self.bottom_left + Vec2d::new(self.size.x / 2, self.size.y)
     }
     fn center_left(&self) -> Vec2d {
-        self.bottom_left + Vec2d::from((0, self.size.y / 2))
+        self.bottom_left + Vec2d::new(0, self.size.y / 2)
     }
     fn center_right(&self) -> Vec2d {
-        self.bottom_left + Vec2d::from((self.size.x, self.size.y / 2))
+        self.bottom_left + Vec2d::new(self.size.x, self.size.y / 2)
     }
 
     fn offset(&self, delta: Vec2d) -> Rect {
@@ -257,8 +261,8 @@ impl Rect {
 #[test]
 fn test_overlaps() {
     let main = Rect {
-        bottom_left: Vec2d::from((0, 0)),
-        size: Vec2d::from((1920, 1080)),
+        bottom_left: Vec2d::new(0, 0),
+        size: Vec2d::new(1920, 1080),
     };
     // Adjacent
     assert!(!main.overlaps(&main.offset((1920, 0).into())));
@@ -283,9 +287,9 @@ fn test_overlaps() {
 #[cfg(test)]
 #[test]
 fn test_direction() {
-    let size = Vec2d::from((1920, 1080));
+    let size = Vec2d::new(1920, 1080);
     let primary = Rect {
-        bottom_left: Vec2d::from((0, 0)),
+        bottom_left: Vec2d::new(0, 0),
         size,
     };
     let at_right = Rect {
@@ -293,7 +297,7 @@ fn test_direction() {
         size,
     };
     let right_overlap = Rect {
-        bottom_left: primary.bottom_right() + Vec2d::from((1, 0)),
+        bottom_left: primary.bottom_right() + Vec2d::new(1, 0),
         size,
     };
     let above_middle = Rect {
@@ -301,8 +305,8 @@ fn test_direction() {
         size,
     };
     let smaller_below = Rect {
-        bottom_left: primary.center_bottom() + Vec2d::from((200, -480)),
-        size: Vec2d::from((640, 480)),
+        bottom_left: primary.center_bottom() + Vec2d::new(200, -480),
+        size: Vec2d::new(640, 480),
     };
     assert_eq!(Rect::adjacent_direction(&primary, &primary), None);
     assert_eq!(

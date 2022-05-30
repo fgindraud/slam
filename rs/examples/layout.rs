@@ -69,11 +69,11 @@ fn main() {
     let rects = [
         Rect {
             bottom_left: origin,
-            size: Vec2d::from((640, 480)),
+            size: Vec2d::new(640, 480),
         },
         Rect {
-            bottom_left: origin + Vec2d::from((640, 0)),
-            size: Vec2d::from((320, 240)),
+            bottom_left: origin + Vec2d::new(640, 0),
+            size: Vec2d::new(320, 240),
         },
     ];
     draw_layout(std::path::Path::new("test.png"), &rects)

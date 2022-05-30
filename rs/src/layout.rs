@@ -210,7 +210,7 @@ impl Layout {
             Some((i, _)) => i,
             None => unreachable!(),
         };
-        coordinates[biggest_screen] = Some(Vec2d::from((0, 0)));
+        coordinates[biggest_screen] = Some(Vec2d::new(0, 0));
         outputs_to_see.push_back(biggest_screen);
         //
         while let Some(left) = outputs_to_see.pop_front() {

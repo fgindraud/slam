@@ -235,7 +235,7 @@ fn convert_to_layout(output_states: &OutputSetState) -> Option<Layout> {
         let valid_mode = output_states.mode_from_id(assigned_crtc.mode())?;
         let transform = Transform::from(assigned_crtc.rotation());
         let rect = Rect {
-            bottom_left: Vec2d::from((assigned_crtc.x(), assigned_crtc.y())),
+            bottom_left: Vec2d::new(assigned_crtc.x().into(), assigned_crtc.y().into()),
             size: valid_mode.size,
         };
         Some((transform, valid_mode, rect))
@@ -329,7 +329,7 @@ impl From<Transform> for xcb::randr::Rotation {
 
 impl From<&'_ xcb::randr::ModeInfo> for Mode {
     fn from(xcb_mode: &'_ xcb::randr::ModeInfo) -> Mode {
-        let size = Vec2d::from((xcb_mode.width, xcb_mode.height));
+        let size = Vec2d::new(xcb_mode.width.into(), xcb_mode.height.into());
         let dots = u32::from(xcb_mode.htotal) * u32::from(xcb_mode.vtotal);
         assert_ne!(dots, 0, "invalid xcb::ModeInfo");
         let frequency = f64::from(xcb_mode.dot_clock) / f64::from(dots);
