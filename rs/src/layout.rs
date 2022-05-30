@@ -1,4 +1,4 @@
-use crate::geometry::{self, Direction, Rect, Transform, Vec2d};
+use crate::geometry::{Direction, Rect, Transform, Vec2di};
 use std::num::NonZeroUsize;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -36,7 +36,7 @@ impl<'a> TryFrom<&'a [u8]> for Edid {
 
 #[derive(Debug, Clone)]
 pub struct Mode {
-    pub size: Vec2d,
+    pub size: Vec2di,
     pub frequency: f64, // FIXME
 }
 
@@ -198,7 +198,7 @@ impl Layout {
             },
         ));
         // Create affine expressions for base coordinates that will be filled later.
-        let mut coordinates: Vec<Option<Vec2d>> = vec![None; n_outputs];
+        let mut coordinates: Vec<Option<Vec2di>> = vec![None; n_outputs];
         let mut outputs_to_see = std::collections::VecDeque::with_capacity(n_outputs);
         let mut relations = self.relations.clone();
         // Start with biggest screen, at pos (0,0)
@@ -210,7 +210,7 @@ impl Layout {
             Some((i, _)) => i,
             None => unreachable!(),
         };
-        coordinates[biggest_screen] = Some(Vec2d::new(0, 0));
+        coordinates[biggest_screen] = Some(Vec2di::new(0, 0));
         outputs_to_see.push_back(biggest_screen);
         //
         while let Some(left) = outputs_to_see.pop_front() {

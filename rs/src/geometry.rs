@@ -133,28 +133,33 @@ impl Direction {
 /// Pair of integer, used as coordinates / size. Uses the usual cartesian orientation :
 /// - `x` goes from right to left.
 /// - `y` goes upward.
+pub type Vec2di = Vec2d<i32>;
+
+/// Generic pair type. Specialised for coordinates as [`Vec2di`].
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Vec2d {
-    pub x: i32,
-    pub y: i32,
+pub struct Vec2d<T> {
+    pub x: T,
+    pub y: T,
 }
 
-impl Vec2d {
-    pub fn new(x: i32, y: i32) -> Self {
+impl<T> Vec2d<T> {
+    pub fn new(x: T, y: T) -> Self {
         Vec2d { x, y }
     }
 }
 
-impl From<(i32, i32)> for Vec2d {
-    fn from(pair: (i32, i32)) -> Vec2d {
-        let (x, y) = pair;
-        Vec2d { x, y }
+impl<T> From<(T, T)> for Vec2d<T> {
+    fn from(pair: (T, T)) -> Self {
+        Vec2d {
+            x: pair.0,
+            y: pair.1,
+        }
     }
 }
 
-impl Add for Vec2d {
-    type Output = Vec2d;
-    fn add(self, rhs: Vec2d) -> Vec2d {
+impl<T: Add> Add for Vec2d<T> {
+    type Output = Vec2d<T::Output>;
+    fn add(self, rhs: Vec2d<T>) -> Self::Output {
         Vec2d {
             x: self.x + rhs.x,
             y: self.y + rhs.y,
@@ -162,9 +167,9 @@ impl Add for Vec2d {
     }
 }
 
-impl Sub for Vec2d {
-    type Output = Vec2d;
-    fn sub(self, rhs: Vec2d) -> Vec2d {
+impl<T: Sub> Sub for Vec2d<T> {
+    type Output = Vec2d<T::Output>;
+    fn sub(self, rhs: Vec2d<T>) -> Self::Output {
         Vec2d {
             x: self.x - rhs.x,
             y: self.y - rhs.y,
@@ -172,9 +177,9 @@ impl Sub for Vec2d {
     }
 }
 
-impl Vec2d {
+impl<T: Ord> Vec2d<T> {
     /// Component-wise max.
-    fn cwise_max(self, rhs: Vec2d) -> Vec2d {
+    fn cwise_max(self, rhs: Vec2d<T>) -> Vec2d<T> {
         Vec2d {
             x: std::cmp::max(self.x, rhs.x),
             y: std::cmp::max(self.y, rhs.y),
@@ -188,35 +193,35 @@ impl Vec2d {
 /// The rectangle covers pixels in `[bl.x, bl.x+size.x[ X [bl.y, bl.y+size.y[`.
 /// Top and right sides are excluded.
 pub struct Rect {
-    pub bottom_left: Vec2d,
-    pub size: Vec2d,
+    pub bottom_left: Vec2di,
+    pub size: Vec2di,
 }
 
 impl Rect {
-    pub fn top_right(&self) -> Vec2d {
+    pub fn top_right(&self) -> Vec2di {
         self.bottom_left + self.size
     }
-    fn bottom_right(&self) -> Vec2d {
-        self.bottom_left + Vec2d::new(self.size.x, 0)
+    fn bottom_right(&self) -> Vec2di {
+        self.bottom_left + Vec2di::new(self.size.x, 0)
     }
-    fn top_left(&self) -> Vec2d {
-        self.bottom_left + Vec2d::new(0, self.size.y)
-    }
-
-    fn center_bottom(&self) -> Vec2d {
-        self.bottom_left + Vec2d::new(self.size.x / 2, 0)
-    }
-    fn center_top(&self) -> Vec2d {
-        self.bottom_left + Vec2d::new(self.size.x / 2, self.size.y)
-    }
-    fn center_left(&self) -> Vec2d {
-        self.bottom_left + Vec2d::new(0, self.size.y / 2)
-    }
-    fn center_right(&self) -> Vec2d {
-        self.bottom_left + Vec2d::new(self.size.x, self.size.y / 2)
+    fn top_left(&self) -> Vec2di {
+        self.bottom_left + Vec2di::new(0, self.size.y)
     }
 
-    fn offset(&self, delta: Vec2d) -> Rect {
+    fn center_bottom(&self) -> Vec2di {
+        self.bottom_left + Vec2di::new(self.size.x / 2, 0)
+    }
+    fn center_top(&self) -> Vec2di {
+        self.bottom_left + Vec2di::new(self.size.x / 2, self.size.y)
+    }
+    fn center_left(&self) -> Vec2di {
+        self.bottom_left + Vec2di::new(0, self.size.y / 2)
+    }
+    fn center_right(&self) -> Vec2di {
+        self.bottom_left + Vec2di::new(self.size.x, self.size.y / 2)
+    }
+
+    fn offset(&self, delta: Vec2di) -> Rect {
         Rect {
             bottom_left: self.bottom_left + delta,
             size: self.size,
@@ -238,9 +243,11 @@ impl Rect {
     /// Current criterion : adjacent == touching on one side with an overlap at least half the size of the smallest rect.
     pub fn adjacent_direction(&self, rhs: &Rect) -> Option<Direction> {
         let lhs = self;
-        let size_max = Vec2d::cwise_max(lhs.size, rhs.size);
-        let is_adjacent_x = |l: Vec2d, r: Vec2d| l.x == r.x && 2 * (l.y - r.y).abs() <= size_max.y;
-        let is_adjacent_y = |l: Vec2d, r: Vec2d| l.y == r.y && 2 * (l.x - r.x).abs() <= size_max.x;
+        let size_max = Vec2di::cwise_max(lhs.size, rhs.size);
+        let is_adjacent_x =
+            |l: Vec2di, r: Vec2di| l.x == r.x && 2 * (l.y - r.y).abs() <= size_max.y;
+        let is_adjacent_y =
+            |l: Vec2di, r: Vec2di| l.y == r.y && 2 * (l.x - r.x).abs() <= size_max.x;
         if is_adjacent_x(lhs.center_right(), rhs.center_left()) {
             return Some(Direction::LeftOf);
         }
@@ -261,8 +268,8 @@ impl Rect {
 #[test]
 fn test_overlaps() {
     let main = Rect {
-        bottom_left: Vec2d::new(0, 0),
-        size: Vec2d::new(1920, 1080),
+        bottom_left: Vec2di::new(0, 0),
+        size: Vec2di::new(1920, 1080),
     };
     // Adjacent
     assert!(!main.overlaps(&main.offset((1920, 0).into())));
@@ -287,9 +294,9 @@ fn test_overlaps() {
 #[cfg(test)]
 #[test]
 fn test_direction() {
-    let size = Vec2d::new(1920, 1080);
+    let size = Vec2di::new(1920, 1080);
     let primary = Rect {
-        bottom_left: Vec2d::new(0, 0),
+        bottom_left: Vec2di::new(0, 0),
         size,
     };
     let at_right = Rect {
@@ -297,7 +304,7 @@ fn test_direction() {
         size,
     };
     let right_overlap = Rect {
-        bottom_left: primary.bottom_right() + Vec2d::new(1, 0),
+        bottom_left: primary.bottom_right() + Vec2di::new(1, 0),
         size,
     };
     let above_middle = Rect {
@@ -305,7 +312,7 @@ fn test_direction() {
         size,
     };
     let smaller_below = Rect {
-        bottom_left: primary.center_bottom() + Vec2d::new(200, -480),
+        bottom_left: primary.center_bottom() + Vec2di::new(200, -480),
         size: Vec2d::new(640, 480),
     };
     assert_eq!(Rect::adjacent_direction(&primary, &primary), None);

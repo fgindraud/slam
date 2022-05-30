@@ -65,15 +65,15 @@ fn draw_layout(png_path: &std::path::Path, rects: &[geometry::Rect]) {
 }
 
 fn main() {
-    let origin = Vec2d::default();
+    let origin = Vec2di::default();
     let rects = [
         Rect {
             bottom_left: origin,
-            size: Vec2d::new(640, 480),
+            size: Vec2di::new(640, 480),
         },
         Rect {
             bottom_left: origin + Vec2d::new(640, 0),
-            size: Vec2d::new(320, 240),
+            size: Vec2di::new(320, 240),
         },
     ];
     draw_layout(std::path::Path::new("test.png"), &rects)
