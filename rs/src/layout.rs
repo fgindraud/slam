@@ -188,7 +188,6 @@ impl std::error::Error for LayoutInferenceError {}
 
 impl Layout {
     pub fn compute_rects(&self, enabled_output_preferred_modes: &[Mode]) -> Vec<Rect> {
-        use good_lp::{Expression, IntoAffineExpression};
         let n_outputs = self.enabled_outputs.len();
         assert!(enabled_output_preferred_modes.len() == n_outputs);
         // Use preferred mode size when Edid is not available
@@ -199,7 +198,7 @@ impl Layout {
             },
         ));
         // Create affine expressions for base coordinates that will be filled later.
-        let mut coordinates: Vec<Option<(Expression, Expression)>> = vec![None; n_outputs];
+        let mut coordinates: Vec<Option<Vec2d>> = vec![None; n_outputs];
         let mut outputs_to_see = std::collections::VecDeque::with_capacity(n_outputs);
         let mut relations = self.relations.clone();
         // Start with biggest screen, at pos (0,0)
@@ -211,10 +210,9 @@ impl Layout {
             Some((i, _)) => i,
             None => unreachable!(),
         };
-        coordinates[biggest_screen] = Some((Expression::from(0), Expression::from(0)));
+        coordinates[biggest_screen] = Some(Vec2d::from((0, 0)));
         outputs_to_see.push_back(biggest_screen);
         //
-        let mut problem = good_lp::ProblemVariables::new();
         while let Some(left) = outputs_to_see.pop_front() {
             // Process relations to neighbors
             for right in 0..n_outputs {
@@ -225,10 +223,7 @@ impl Layout {
                         // Defined coords for right
                         let left_coord = coordinates[left].as_ref().unwrap();
                         let right_coord = match relation {
-                            Direction::LeftOf => (
-                                left_coord.0.clone() + output_sizes[left].x,
-                                problem.add_variable().into_expression(),
-                            ),
+                            Direction::LeftOf => todo!(),
                             _ => todo!(),
                         };
                     }
