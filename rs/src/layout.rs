@@ -188,49 +188,92 @@ impl std::error::Error for LayoutInferenceError {}
 
 impl Layout {
     pub fn compute_rects(&self, enabled_output_preferred_modes: &[Mode]) -> Vec<Rect> {
-        let n_outputs = self.enabled_outputs.len();
-        assert!(enabled_output_preferred_modes.len() == n_outputs);
+        assert_eq!(
+            enabled_output_preferred_modes.len(),
+            self.enabled_outputs.len()
+        );
         // Use preferred mode size when Edid is not available
-        let output_sizes = Vec::from_iter(self.enabled_outputs.iter().enumerate().map(
-            |(i, output)| match output {
+        let output_sizes = Vec::from_iter(
+            Iterator::zip(
+                self.enabled_outputs.iter(),
+                enabled_output_preferred_modes.iter(),
+            )
+            .map(|(output, preferred_mode)| match output {
                 EnabledOutput::Edid { mode, .. } => mode.size.clone(),
-                EnabledOutput::Name { .. } => enabled_output_preferred_modes[i].size.clone(),
-            },
-        ));
-        // Create affine expressions for base coordinates that will be filled later.
-        let mut coordinates: Vec<Option<Vec2di>> = vec![None; n_outputs];
-        let mut outputs_to_see = std::collections::VecDeque::with_capacity(n_outputs);
-        let mut relations = self.relations.clone();
-        // Start with biggest screen, at pos (0,0)
-        let biggest_screen = match output_sizes
+                EnabledOutput::Name { .. } => preferred_mode.size.clone(),
+            }),
+        );
+        // TODO
+        Vec::new()
+    }
+}
+
+mod compute_rects {
+    use super::RelationMatrix;
+    use crate::geometry::{Direction, Vec2d, Vec2di};
+    use std::{collections::VecDeque, ops::Add};
+
+    pub fn compute_base_coordinates(sizes: &[Vec2di], relations: RelationMatrix) -> Vec<Vec2di> {
+        let n_outputs = sizes.len();
+        assert_eq!(n_outputs, relations.size().get());
+        // State
+        let mut problem = QpProblemState {
+            nb_variables: 0,
+            coordinate_definitions: vec![None; n_outputs],
+        };
+        let mut relations_not_processed = relations;
+        let mut defined_outputs = VecDeque::with_capacity(n_outputs);
+        // Start with biggest screen at pos (0,0)
+        let biggest_screen = sizes
             .iter()
             .enumerate()
             .max_by_key(|(_i, size)| size.x * size.y)
-        {
-            Some((i, _)) => i,
-            None => unreachable!(),
-        };
-        coordinates[biggest_screen] = Some(Vec2di::new(0, 0));
-        outputs_to_see.push_back(biggest_screen);
+            .map(|(i, _size)| i)
+            .unwrap();
+        problem.coordinate_definitions[biggest_screen] =
+            Some(Vec2d::new(Expression::Constant(0), Expression::Constant(0)));
+        defined_outputs.push_back(biggest_screen);
         //
-        while let Some(left) = outputs_to_see.pop_front() {
+        while let Some(defined) = defined_outputs.pop_front() {
+            let defined_expr = problem.coordinate_definitions[defined].as_ref().unwrap();
             // Process relations to neighbors
-            for right in 0..n_outputs {
-                if let Some(relation) = relations.get(left, right) {
-                    if let Some(_) = coordinates[right] {
-                        // Already defined coords, add constraints
-                    } else {
-                        // Defined coords for right
-                        let left_coord = coordinates[left].as_ref().unwrap();
-                        let right_coord = match relation {
-                            Direction::LeftOf => todo!(),
-                            _ => todo!(),
-                        };
+            for other in 0..n_outputs {
+                if let Some(relation) = relations_not_processed.get(defined, other) {
+                    relations_not_processed.set(defined, other, None);
+                    // TODO
+                    match relation {
+                        Direction::LeftOf => (),
+                        _ => todo!(),
                     }
                 }
             }
         }
+
         Vec::new()
+    }
+
+    struct QpProblemState {
+        nb_variables: usize,
+        coordinate_definitions: Vec<Option<Vec2d<Expression>>>,
+    }
+
+    #[derive(Clone)]
+    enum Expression {
+        Constant(i32),
+        Variable { index: usize, offset: i32 },
+    }
+
+    impl Add<i32> for &Expression {
+        type Output = Expression;
+        fn add(self, rhs: i32) -> Expression {
+            match self {
+                Expression::Constant(i) => Expression::Constant(i + rhs),
+                Expression::Variable { index, offset } => Expression::Variable {
+                    index: index.clone(),
+                    offset: offset + rhs,
+                },
+            }
+        }
     }
 }
 
