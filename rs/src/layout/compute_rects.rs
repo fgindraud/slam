@@ -37,10 +37,22 @@ pub fn compute_base_coordinates(
     for rhs in 0..n_outputs {
         for lhs in 0..rhs {
             if let Some(relation) = relations.get(lhs, rhs) {
-                // TODO
+                let lhs_coord = problem.coordinate_definitions[lhs].clone();
+                let rhs_coord = problem.coordinate_definitions[rhs].clone();
                 match relation {
-                    Direction::LeftOf => (),
-                    _ => todo!(),
+                    // TODO bi constraints for ortho direction
+                    Direction::LeftOf => {
+                        problem.add_equality_constraint(lhs_coord.x + sizes[lhs].x, rhs_coord.x)?
+                    }
+                    Direction::RightOf => {
+                        problem.add_equality_constraint(lhs_coord.x, rhs_coord.x + sizes[rhs].x)?
+                    }
+                    Direction::Under => {
+                        problem.add_equality_constraint(lhs_coord.y + sizes[lhs].y, rhs_coord.y)?
+                    }
+                    Direction::Above => {
+                        problem.add_equality_constraint(lhs_coord.y, rhs_coord.y + sizes[rhs].y)?
+                    }
                 }
             }
         }
@@ -64,8 +76,8 @@ impl QpProblemState {
 
     fn add_equality_constraint(
         &mut self,
-        lhs: &Expression,
-        rhs: &Expression,
+        lhs: Expression,
+        rhs: Expression,
     ) -> Result<(), Infeasible> {
         match (lhs.variable, rhs.variable) {
             (None, None) => {
@@ -162,7 +174,7 @@ impl QpProblemState {
                     variable.index -= 1;
                 } else if variable.index == removed.index {
                     expr.constant += kept_offset;
-                    expr.variable = Some(kept.clone());
+                    expr.variable = Some(kept);
                 }
             }
         };
@@ -239,13 +251,11 @@ impl Expression {
     }
 }
 
-impl Add<i32> for &Expression {
+impl Add<i32> for Expression {
     type Output = Expression;
-    fn add(self, rhs: i32) -> Expression {
-        Expression {
-            constant: self.constant + rhs,
-            variable: self.variable.clone(),
-        }
+    fn add(mut self, rhs: i32) -> Expression {
+        self.constant += rhs;
+        self
     }
 }
 
@@ -254,8 +264,8 @@ impl Add<i32> for &Expression {
 fn test_qp_problem_replace_with_const() {
     let mut problem = QpProblemState::default();
     let coord0 = Vec2d::new(
-        &Expression::free_variable(&mut problem) + 40, // index 0
-        Expression::free_variable(&mut problem),       // index 1
+        Expression::free_variable(&mut problem) + 40, // index 0
+        Expression::free_variable(&mut problem),      // index 1
     );
     let coord1 = Vec2d::new(
         Expression {
@@ -295,8 +305,8 @@ fn test_qp_problem_replace_with_const() {
 fn test_qp_problem_merge_variables() {
     let mut problem = QpProblemState::default();
     let coord0 = Vec2d::new(
-        &Expression::free_variable(&mut problem) + 40, // index 0
-        Expression::free_variable(&mut problem),       // index 1
+        Expression::free_variable(&mut problem) + 40, // index 0
+        Expression::free_variable(&mut problem),      // index 1
     );
     let coord1 = Vec2d::new(
         Expression {
@@ -316,8 +326,8 @@ fn test_qp_problem_merge_variables() {
     problem.variables[4].bounds = 0..=10;
     // x = y + 10, {x,y} in [0,10] => x = 10, y = 0
     let result = problem.add_equality_constraint(
-        &problem.coordinate_definitions[2].x.clone(),
-        &problem.coordinate_definitions[2].y.add(10),
+        problem.coordinate_definitions[2].x.clone(),
+        problem.coordinate_definitions[2].y.clone() + 10,
     );
     assert!(result.is_ok());
     assert_eq!(problem.variables.len(), 3);
@@ -329,8 +339,8 @@ fn test_qp_problem_merge_variables() {
     // normal merge (0 with 1), shifts 2 -> 1.
     // (0) + 40 == (1) + 10. bounds of (0) infinite so just reuse ones from 1
     let result = problem.add_equality_constraint(
-        &problem.coordinate_definitions[0].x.clone(),
-        &problem.coordinate_definitions[0].y.add(10),
+        problem.coordinate_definitions[0].x.clone(),
+        problem.coordinate_definitions[0].y.clone() + 10,
     );
     assert!(result.is_ok());
     assert_eq!(
@@ -350,8 +360,8 @@ fn test_qp_problem_merge_variables() {
     );
     // failed merge
     let result = problem.add_equality_constraint(
-        &problem.coordinate_definitions[0].x.clone(),
-        &problem.coordinate_definitions[1].y.add(100),
+        problem.coordinate_definitions[0].x.clone(),
+        problem.coordinate_definitions[1].y.clone() + 100,
     );
     assert!(result.is_err())
 }
