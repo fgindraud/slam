@@ -1,12 +1,6 @@
 #![allow(dead_code)] // Testing only part of the code.
 
-// Reuse modules without defining a library, which would be confusing and require a lib/bin boundary.
-#[path = "../src/geometry.rs"]
-mod geometry;
-#[path = "../src/layout.rs"]
-mod layout;
-
-use geometry::*;
+use slam::geometry::{Rect, Vec2di};
 
 // Palette with evenly distributed hues
 fn color_palette(n: usize) -> impl Iterator<Item = tiny_skia::Color> {
@@ -22,12 +16,12 @@ fn color_palette(n: usize) -> impl Iterator<Item = tiny_skia::Color> {
     })
 }
 
-fn boundary_rect(rects: &[geometry::Rect]) -> geometry::Rect {
-    let bottom_left = Vec2d {
+fn boundary_rect(rects: &[Rect]) -> Rect {
+    let bottom_left = Vec2di {
         x: rects.iter().map(|r| r.bottom_left.x).min().unwrap_or(0),
         y: rects.iter().map(|r| r.bottom_left.y).min().unwrap_or(0),
     };
-    let top_right = Vec2d {
+    let top_right = Vec2di {
         x: rects.iter().map(|r| r.top_right().x).max().unwrap_or(0),
         y: rects.iter().map(|r| r.top_right().y).max().unwrap_or(0),
     };
@@ -37,7 +31,7 @@ fn boundary_rect(rects: &[geometry::Rect]) -> geometry::Rect {
     }
 }
 
-fn draw_layout(png_path: &std::path::Path, rects: &[geometry::Rect]) {
+fn draw_layout(png_path: &std::path::Path, rects: &[Rect]) {
     // Conversion utils
     let tu32 = |i: i32| u32::try_from(i).unwrap();
     let tf32 = |i: i32| f32::from(i16::try_from(i).unwrap());
@@ -72,7 +66,7 @@ fn main() {
             size: Vec2di::new(640, 480),
         },
         Rect {
-            bottom_left: origin + Vec2d::new(640, 0),
+            bottom_left: origin + Vec2di::new(640, 0),
             size: Vec2di::new(320, 240),
         },
     ];

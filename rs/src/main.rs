@@ -1,19 +1,6 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-/// Basic geometric primitives.
-mod geometry;
-/// Output layouts definitions and utils.
-mod layout;
-
-trait Backend {
-    fn wait_for_change(&mut self) -> Result<(), anyhow::Error>;
-}
-
-/// X backend
-#[cfg(feature = "xcb")]
-mod xcb;
-
 #[derive(Debug, Parser)]
 #[clap(version, about)]
 struct DaemonOptions {
@@ -46,14 +33,14 @@ fn main() -> Result<(), anyhow::Error> {
     dbg!(database_path);
 
     #[cfg(feature = "xcb")]
-    match xcb::XcbBackend::start() {
+    match slam::xcb::XcbBackend::start() {
         Ok(mut backend) => return run_daemon(&mut backend),
         Err(err) => eprintln!("Cannot start Xcb backend: {}", err),
     }
     Err(anyhow::Error::msg("No working available backend"))
 }
 
-fn run_daemon(backend: &mut dyn Backend) -> Result<(), anyhow::Error> {
+fn run_daemon(backend: &mut dyn slam::Backend) -> Result<(), anyhow::Error> {
     loop {
         backend.wait_for_change()?
     }

@@ -19,7 +19,6 @@ osqp = "0.6.2" # quadratic solver for layout inference
 # xcb backend: feature "xcb"
 xcb = { version = "1.1", features = ["randr"], optional = true }
 
-
 [dev-dependencies]
 # Drawing for layout examples
 tiny-skia = "0.6.3"

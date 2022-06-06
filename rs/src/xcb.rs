@@ -1,5 +1,6 @@
 use crate::geometry::{Rect, Rotation, Transform, Vec2di};
 use crate::layout::{Edid, EnabledOutput, Layout, Mode, OutputId};
+use crate::Backend;
 use std::collections::HashMap;
 use xcb::Xid;
 
@@ -68,7 +69,7 @@ impl XcbBackend {
     }
 }
 
-impl super::Backend for XcbBackend {
+impl Backend for XcbBackend {
     fn wait_for_change(&mut self) -> Result<(), anyhow::Error> {
         // Wait for any randr event, then reload entire randr state.
         // Easier than patching state with notify event data.
