@@ -1,4 +1,5 @@
-use crate::geometry::{Direction, Rect, Transform, Vec2di};
+use crate::geometry::{Direction, InvertibleRelation, Rect, Transform, Vec2di};
+use std::cmp::Ordering;
 use std::num::NonZeroUsize;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -81,7 +82,7 @@ pub struct Layout {
     /// Enabled output states.
     enabled_outputs: Box<[EnabledOutput]>,
     /// Relative positionning of the enabled outputs. Indexed by position of outputs in `enabled_outputs`.
-    relations: RelationMatrix,
+    relations: RelationMatrix<Direction>,
     /// Primary output if used / supported. Not in Wayland apparently.
     /// Used by some window manager to choose where to place tray icons, etc.
     /// Index is a reference in `enabled_outputs`.
@@ -213,20 +214,20 @@ mod compute_rects;
 
 ///////////////////////////////////////////////////////////////////////////////
 
-/// Stores directional relations efficiently.
-/// Semantically a `Map<(usize,usize), Option<Direction>>`.
-/// Directions are only stored for `lhs < rhs` and is reversed if necessary, all to avoid redundant data.
-/// Relation of a screen with itself makes no sense, so it is not stored and always evaluate to [`None`].
+/// Stores binary relations efficiently, like [`Direction`].
+/// Semantically a `Map<(usize,usize), Option<T>>`.
+/// Relations are only stored for `lhs < rhs` and is reversed if necessary, all to avoid redundant data.
+/// Relation with self are ignored, so it is not stored and always evaluate to [`None`].
 /// Invalid indexes will trigger a [`panic!`].
 #[derive(Debug, Clone)]
-pub struct RelationMatrix {
+pub struct RelationMatrix<T> {
     size: NonZeroUsize,
     /// `size * (size - 1) / 2` relations
-    array: Box<[Option<Direction>]>,
+    array: Box<[Option<T>]>,
 }
 
-impl RelationMatrix {
-    pub fn new(size: NonZeroUsize) -> RelationMatrix {
+impl<T: InvertibleRelation + Clone> RelationMatrix<T> {
+    pub fn new(size: NonZeroUsize) -> RelationMatrix<T> {
         let n = size.get();
         let buffer_size = (n * (n - 1)) / 2;
         RelationMatrix {
@@ -248,26 +249,29 @@ impl RelationMatrix {
         high_offset + low
     }
 
-    pub fn get(&self, lhs: usize, rhs: usize) -> Option<Direction> {
-        match (lhs, rhs) {
-            (lhs, rhs) if lhs < rhs => self.array[self.linearized_index(lhs, rhs)],
-            (lhs, rhs) if lhs > rhs => {
-                self.array[self.linearized_index(rhs, lhs)].map(|d| d.inverse())
-            }
-            _ => None,
+    pub fn get(&self, lhs: usize, rhs: usize) -> Option<T> {
+        match Ord::cmp(&lhs, &rhs) {
+            Ordering::Less => self.array[self.linearized_index(lhs, rhs)].clone(),
+            Ordering::Greater => self.array[self.linearized_index(rhs, lhs)]
+                .as_ref()
+                .map(|r| r.inverse()),
+            Ordering::Equal => None,
         }
     }
 
-    pub fn set(&mut self, lhs: usize, rhs: usize, relation: Option<Direction>) {
-        match (lhs, rhs) {
-            (lhs, rhs) if lhs < rhs => self.array[self.linearized_index(lhs, rhs)] = relation,
-            (lhs, rhs) if lhs > rhs => {
-                self.array[self.linearized_index(rhs, lhs)] = relation.map(|d| d.inverse())
+    pub fn set(&mut self, lhs: usize, rhs: usize, relation: Option<T>) {
+        match Ord::cmp(&lhs, &rhs) {
+            Ordering::Less => self.array[self.linearized_index(lhs, rhs)] = relation,
+            Ordering::Greater => {
+                self.array[self.linearized_index(rhs, lhs)] = relation.map(|r| r.inverse())
             }
-            _ => (),
+            Ordering::Equal => (),
         }
     }
+}
 
+impl RelationMatrix<Direction> {
+    /// Check if all outputs are connected by direction relations.
     pub fn is_single_connected_component(&self) -> bool {
         // Union find structure with indexes : map[0..size] -> 0..size
         fn get_representative(map: &[usize], i: usize) -> usize {

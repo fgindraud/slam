@@ -1,5 +1,5 @@
 use super::RelationMatrix;
-use crate::geometry::{Direction, Vec2d, Vec2di};
+use crate::geometry::{Direction, InvertibleRelation, Vec2d, Vec2di};
 use std::cmp::Ordering;
 use std::ops::{Add, RangeInclusive};
 
@@ -7,12 +7,12 @@ pub struct Infeasible;
 
 pub fn compute_base_coordinates(
     sizes: &[Vec2di],
-    relations: &RelationMatrix,
+    relations: &RelationMatrix<Direction>,
 ) -> Result<Vec<Vec2di>, Infeasible> {
     let n_outputs = sizes.len();
     assert_eq!(n_outputs, relations.size().get());
     // Start with biggest screen at pos (0,0), all others at unconstrained coordinates
-    let mut problem = QpProblemState::default();
+    let mut problem = QpProblemState::new();
     let biggest_screen = sizes
         .iter()
         .enumerate()
@@ -61,17 +61,35 @@ pub fn compute_base_coordinates(
     Ok(Vec::new())
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct QpProblemState {
+    /// List of expression of coordinates values.
     coordinate_definitions: Vec<Vec2d<Expression>>,
-    variables: Vec<MonoVariableConstraint>,
+    /// One entry per variable, with index == variable index.
+    /// Thus this is the definition of the number of variables.
+    /// Constraint : `min <= variable <= max`.
+    mono_constraints: Vec<Constraint>,
+    /// `min <= rhs - lhs <= max`. Also read as `lhs + min <= rhs <= lhs + max`.
+    dual_constraints: Option<RelationMatrix<Constraint>>,
 }
 
 impl QpProblemState {
+    fn new() -> QpProblemState {
+        QpProblemState {
+            coordinate_definitions: Vec::new(),
+            mono_constraints: Vec::new(),
+            dual_constraints: None,
+        }
+    }
+
     fn new_variable(&mut self) -> Variable {
-        let index = self.variables.len();
-        self.variables.push(MonoVariableConstraint::default());
+        let index = self.mono_constraints.len();
+        self.mono_constraints.push(Constraint::default());
         Variable { index }
+    }
+
+    fn nb_variables(&self) -> usize {
+        self.mono_constraints.len()
     }
 
     fn add_equality_constraint(
@@ -106,11 +124,11 @@ impl QpProblemState {
         constant: i32,
     ) -> Result<(), Infeasible> {
         let vid = variable.index;
-        if !self.variables[vid].bounds.contains(&constant) {
+        if !self.mono_constraints[vid].bounds.contains(&constant) {
             return Err(Infeasible);
         }
         // Remove the variable, shifting all higher ids by -1, and fix definitions
-        self.variables.remove(vid);
+        self.mono_constraints.remove(vid);
         let fix_definition = |expr: &mut Expression| {
             if let Some(variable) = &mut expr.variable {
                 if variable.index > vid {
@@ -151,9 +169,9 @@ impl QpProblemState {
             }
         };
         // Update variable constraints
-        let updated_kept_constraint = MonoVariableConstraint::merge(
-            &self.variables[kept.index],
-            &self.variables[removed.index].add(-kept_offset),
+        let updated_kept_constraint = Constraint::merge(
+            &self.mono_constraints[kept.index],
+            &self.mono_constraints[removed.index].add(-kept_offset),
         );
         let (min, max) = updated_kept_constraint.bounds.clone().into_inner();
         match Ord::cmp(&min, &max) {
@@ -165,9 +183,9 @@ impl QpProblemState {
                 return self.replace_variable_with_constant(kept, min);
             }
         }
-        self.variables[kept.index] = updated_kept_constraint;
+        self.mono_constraints[kept.index] = updated_kept_constraint;
         // Remove the variable, shifting all higher ids by -1, and fix definitions (removed -> kept + kept_offset)
-        self.variables.remove(removed.index);
+        self.mono_constraints.remove(removed.index);
         let fix_definition = |expr: &mut Expression| {
             if let Some(variable) = &mut expr.variable {
                 if variable.index > removed.index {
@@ -190,43 +208,6 @@ impl QpProblemState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Variable {
     index: usize,
-}
-
-/// `min <= variable <= max`
-#[derive(Debug, PartialEq, Eq)]
-struct MonoVariableConstraint {
-    bounds: RangeInclusive<i32>,
-}
-
-impl Default for MonoVariableConstraint {
-    fn default() -> Self {
-        MonoVariableConstraint {
-            bounds: i32::MIN..=i32::MAX,
-        }
-    }
-}
-
-impl<'a> Add<i32> for &'a MonoVariableConstraint {
-    type Output = MonoVariableConstraint;
-    fn add(self, rhs: i32) -> MonoVariableConstraint {
-        MonoVariableConstraint {
-            bounds: RangeInclusive::new(
-                self.bounds.start().saturating_add(rhs),
-                self.bounds.end().saturating_add(rhs),
-            ),
-        }
-    }
-}
-
-impl MonoVariableConstraint {
-    fn merge(&self, other: &MonoVariableConstraint) -> MonoVariableConstraint {
-        MonoVariableConstraint {
-            bounds: RangeInclusive::new(
-                std::cmp::max(*self.bounds.start(), *other.bounds.start()),
-                std::cmp::min(*self.bounds.end(), *other.bounds.end()),
-            ),
-        }
-    }
 }
 
 /// `constant [+ variable]`
@@ -259,10 +240,56 @@ impl Add<i32> for Expression {
     }
 }
 
+/// `min <= expr <= max`
+#[derive(Debug, PartialEq, Eq)]
+struct Constraint {
+    bounds: RangeInclusive<i32>,
+}
+
+impl Default for Constraint {
+    fn default() -> Self {
+        Constraint {
+            bounds: i32::MIN..=i32::MAX,
+        }
+    }
+}
+
+impl<'a> Add<i32> for &'a Constraint {
+    type Output = Constraint;
+    fn add(self, rhs: i32) -> Constraint {
+        Constraint {
+            bounds: RangeInclusive::new(
+                self.bounds.start().saturating_add(rhs),
+                self.bounds.end().saturating_add(rhs),
+            ),
+        }
+    }
+}
+
+impl Constraint {
+    fn merge(&self, other: &Constraint) -> Constraint {
+        Constraint {
+            bounds: RangeInclusive::new(
+                std::cmp::max(*self.bounds.start(), *other.bounds.start()),
+                std::cmp::min(*self.bounds.end(), *other.bounds.end()),
+            ),
+        }
+    }
+}
+
+/// Only meaningful when used as dual constraint.
+/// `min <= rhs - lhs <= max` <=> `-max <= lhs - rhs <= -min`.
+impl InvertibleRelation for Constraint {
+    fn inverse(&self) -> Self {
+        let bounds = RangeInclusive::new(-self.bounds.end(), -self.bounds.start());
+        Constraint { bounds }
+    }
+}
+
 #[cfg(test)]
 #[test]
 fn test_qp_problem_replace_with_const() {
-    let mut problem = QpProblemState::default();
+    let mut problem = QpProblemState::new();
     let coord0 = Vec2d::new(
         Expression::free_variable(&mut problem) + 40, // index 0
         Expression::free_variable(&mut problem),      // index 1
@@ -275,8 +302,8 @@ fn test_qp_problem_replace_with_const() {
         Expression::constant(42),
     );
     problem.coordinate_definitions = vec![coord0, coord1];
-    problem.variables[0].bounds = -10..=10;
-    problem.variables[1].bounds = 0..=10;
+    problem.mono_constraints[0].bounds = -10..=10;
+    problem.mono_constraints[1].bounds = 0..=10;
     // successful replacement
     let replacement = problem.replace_variable_with_constant(Variable { index: 0 }, -10);
     assert!(replacement.is_ok());
@@ -303,7 +330,7 @@ fn test_qp_problem_replace_with_const() {
 #[cfg(test)]
 #[test]
 fn test_qp_problem_merge_variables() {
-    let mut problem = QpProblemState::default();
+    let mut problem = QpProblemState::new();
     let coord0 = Vec2d::new(
         Expression::free_variable(&mut problem) + 40, // index 0
         Expression::free_variable(&mut problem),      // index 1
@@ -320,17 +347,17 @@ fn test_qp_problem_merge_variables() {
         Expression::free_variable(&mut problem), // index 4
     );
     problem.coordinate_definitions = vec![coord0, coord1, coord2];
-    problem.variables[1].bounds = -10..=10;
-    problem.variables[2].bounds = -10..=10;
-    problem.variables[3].bounds = 0..=10;
-    problem.variables[4].bounds = 0..=10;
+    problem.mono_constraints[1].bounds = -10..=10;
+    problem.mono_constraints[2].bounds = -10..=10;
+    problem.mono_constraints[3].bounds = 0..=10;
+    problem.mono_constraints[4].bounds = 0..=10;
     // x = y + 10, {x,y} in [0,10] => x = 10, y = 0
     let result = problem.add_equality_constraint(
         problem.coordinate_definitions[2].x.clone(),
         problem.coordinate_definitions[2].y.clone() + 10,
     );
     assert!(result.is_ok());
-    assert_eq!(problem.variables.len(), 3);
+    assert_eq!(problem.mono_constraints.len(), 3);
     assert_eq!(
         problem.coordinate_definitions[2].x,
         Expression::constant(10)
@@ -350,7 +377,7 @@ fn test_qp_problem_merge_variables() {
             variable: Some(Variable { index: 0 })
         }
     );
-    assert_eq!(problem.variables[0].bounds, -40..=-20);
+    assert_eq!(problem.mono_constraints[0].bounds, -40..=-20);
     assert_eq!(
         problem.coordinate_definitions[0].y,
         Expression {

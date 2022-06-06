@@ -117,8 +117,13 @@ pub enum Direction {
     Under,
 }
 
-impl Direction {
-    pub fn inverse(&self) -> Direction {
+/// For a binary relation *R*, describes `inverse(R(x,y)) = R(y,x)`.
+pub trait InvertibleRelation {
+    fn inverse(&self) -> Self;
+}
+
+impl InvertibleRelation for Direction {
+    fn inverse(&self) -> Direction {
         match self {
             Direction::LeftOf => Direction::RightOf,
             Direction::RightOf => Direction::LeftOf,
