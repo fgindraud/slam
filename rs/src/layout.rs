@@ -1,6 +1,5 @@
 use crate::geometry::{Direction, InvertibleRelation, Rect, Transform, Vec2di};
 use std::cmp::Ordering;
-use std::num::NonZeroUsize;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -141,9 +140,7 @@ impl Layout {
             enabled_output_and_rects.into_iter().unzip();
         // Infer relations and check layout
         let size = rects.len();
-        let mut relations = RelationMatrix::new(
-            NonZeroUsize::new(size).ok_or(LayoutInferenceError::NoEnabledOutput)?,
-        );
+        let mut relations = RelationMatrix::new(size);
         for lhs_id in 0..size {
             let lhs_rect = &rects[lhs_id];
             for rhs_id in (lhs_id + 1)..size {
@@ -168,7 +165,6 @@ impl Layout {
 
 #[derive(Debug)]
 pub enum LayoutInferenceError {
-    NoEnabledOutput,
     Overlap,
     Gaps,
     ModeDoesNotMatchSize,
@@ -177,7 +173,6 @@ impl std::fmt::Display for LayoutInferenceError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         use LayoutInferenceError::*;
         let s = match self {
-            NoEnabledOutput => "no enabled output",
             Overlap => "some outputs overlap",
             Gaps => "output set does not form a connex block",
             ModeDoesNotMatchSize => "output mode size does not match rect size",
@@ -218,25 +213,31 @@ mod compute_rects;
 /// Semantically a `Map<(usize,usize), Option<T>>`.
 /// Relations are only stored for `lhs < rhs` and is reversed if necessary, all to avoid redundant data.
 /// Relation with self are ignored, so it is not stored and always evaluate to [`None`].
-/// Invalid indexes will trigger a [`panic!`].
+/// Invalid indexes will usually trigger a [`panic!`].
 #[derive(Debug, Clone)]
 pub struct RelationMatrix<T> {
-    size: NonZeroUsize,
+    size: usize,
     /// `size * (size - 1) / 2` relations
-    array: Box<[Option<T>]>,
+    array: Vec<Option<T>>,
 }
 
 impl<T: InvertibleRelation + Clone> RelationMatrix<T> {
-    pub fn new(size: NonZeroUsize) -> RelationMatrix<T> {
-        let n = size.get();
-        let buffer_size = (n * (n - 1)) / 2;
+    /// Buffer size for triangular matrix : `n * (n-1) / 2`.
+    /// Except for `n = 0`, where buffer size is chosen to be 0.
+    fn buffer_size(nb_elements: usize) -> usize {
+        // Clamp to 0 with saturating sub to prevent underflow.
+        (nb_elements * nb_elements.saturating_sub(1)) / 2
+    }
+
+    /// Create an empty relation matrix with `size` elements.
+    pub fn new(size: usize) -> RelationMatrix<T> {
         RelationMatrix {
             size,
-            array: vec![None; buffer_size].into(),
+            array: vec![None; Self::buffer_size(size)],
         }
     }
 
-    pub fn size(&self) -> NonZeroUsize {
+    pub fn size(&self) -> usize {
         self.size
     }
 
@@ -244,11 +245,12 @@ impl<T: InvertibleRelation + Clone> RelationMatrix<T> {
     /// Linearized layout : `[(0,1),(0-1,2),(0-2,3),(0-3,4),...]`.
     fn linearized_index(&self, low: usize, high: usize) -> usize {
         assert!(low < high, "expected {} < {}", low, high);
-        assert!(high < self.size.get());
+        assert!(high < self.size);
         let high_offset = (high * (high - 1)) / 2; // 0, 1, 3, 6, ...
         high_offset + low
     }
 
+    /// Get relation value for `(lhs, rhs)`.
     pub fn get(&self, lhs: usize, rhs: usize) -> Option<T> {
         match Ord::cmp(&lhs, &rhs) {
             Ordering::Less => self.array[self.linearized_index(lhs, rhs)].clone(),
@@ -259,11 +261,16 @@ impl<T: InvertibleRelation + Clone> RelationMatrix<T> {
         }
     }
 
+    /// Set relation value for `(lhs, rhs)`.
     pub fn set(&mut self, lhs: usize, rhs: usize, relation: Option<T>) {
         match Ord::cmp(&lhs, &rhs) {
-            Ordering::Less => self.array[self.linearized_index(lhs, rhs)] = relation,
+            Ordering::Less => {
+                let index = self.linearized_index(lhs, rhs);
+                self.array[index] = relation
+            }
             Ordering::Greater => {
-                self.array[self.linearized_index(rhs, lhs)] = relation.map(|r| r.inverse())
+                let index = self.linearized_index(rhs, lhs);
+                self.array[index] = relation.map(|r| r.inverse())
             }
             Ordering::Equal => (),
         }
@@ -284,11 +291,10 @@ impl RelationMatrix<Direction> {
                 result = repr
             }
         }
-        let size = self.size().get();
-        let mut representatives = Vec::from_iter(0..size);
+        let mut representatives = Vec::from_iter(0..self.size);
         // Start with all outputs as singular components. Merge them every time there is a relation.
-        for lhs in 0..size {
-            for rhs in (lhs + 1)..size {
+        for lhs in 0..self.size {
+            for rhs in (lhs + 1)..self.size {
                 if self.get(lhs, rhs).is_some() {
                     // Merge connected components towards min index.
                     let lhs = get_representative(&representatives, lhs);
@@ -298,7 +304,7 @@ impl RelationMatrix<Direction> {
             }
         }
         // If all outputs form a single block, the representant of everyone should be 0 (smallest).
-        (0..size).all(|output| get_representative(&representatives, output) == 0)
+        (0..self.size).all(|output| get_representative(&representatives, output) == 0)
     }
 
     // TODO serialization : just store linearized buffer, infer size with sqrt()
@@ -307,8 +313,14 @@ impl RelationMatrix<Direction> {
 #[cfg(test)]
 #[test]
 fn test_relation_matrix_basic() {
+    // Check buffer size
+    assert_eq!(RelationMatrix::<Direction>::buffer_size(0), 0);
+    assert_eq!(RelationMatrix::<Direction>::buffer_size(1), 0);
+    assert_eq!(RelationMatrix::<Direction>::buffer_size(2), 1);
+    assert_eq!(RelationMatrix::<Direction>::buffer_size(3), 3);
+    // Basic ops
     let size = 10;
-    let mut matrix = RelationMatrix::new(NonZeroUsize::new(size).unwrap());
+    let mut matrix = RelationMatrix::new(size);
     // Check linearization
     {
         let mut manual_offset = 0;
@@ -332,7 +344,7 @@ fn test_relation_matrix_basic() {
 #[test]
 fn test_relation_matrix_connexity() {
     fn check(n: usize, is_connex: bool, relations: &[(usize, usize)]) {
-        let mut matrix = RelationMatrix::new(NonZeroUsize::new(n).unwrap());
+        let mut matrix = RelationMatrix::new(n);
         for (i, j) in relations {
             // direction itself does not matter
             matrix.set(*i, *j, Some(Direction::LeftOf))
@@ -344,6 +356,8 @@ fn test_relation_matrix_connexity() {
             relations
         )
     }
+    check(0, true, &[]);
+
     check(1, true, &[]);
 
     check(2, false, &[]);

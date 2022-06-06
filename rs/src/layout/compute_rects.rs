@@ -10,7 +10,7 @@ pub fn compute_base_coordinates(
     relations: &RelationMatrix<Direction>,
 ) -> Result<Vec<Vec2di>, Infeasible> {
     let n_outputs = sizes.len();
-    assert_eq!(n_outputs, relations.size().get());
+    assert_eq!(n_outputs, relations.size());
     // Start with biggest screen at pos (0,0), all others at unconstrained coordinates
     let mut problem = QpProblemState::new();
     let biggest_screen = sizes
@@ -31,7 +31,7 @@ pub fn compute_base_coordinates(
                 y: Expression::constant(0),
             }
         };
-        problem.coordinate_definitions.push(definition);
+        problem.add_coordinate(definition);
     }
     //
     for rhs in 0..n_outputs {
@@ -70,7 +70,7 @@ struct QpProblemState {
     /// Constraint : `min <= variable <= max`.
     mono_constraints: Vec<Constraint>,
     /// `min <= rhs - lhs <= max`. Also read as `lhs + min <= rhs <= lhs + max`.
-    dual_constraints: Option<RelationMatrix<Constraint>>,
+    dual_constraints: RelationMatrix<Constraint>,
 }
 
 impl QpProblemState {
@@ -78,7 +78,7 @@ impl QpProblemState {
         QpProblemState {
             coordinate_definitions: Vec::new(),
             mono_constraints: Vec::new(),
-            dual_constraints: None,
+            dual_constraints: RelationMatrix::new(0),
         }
     }
 
@@ -90,6 +90,16 @@ impl QpProblemState {
 
     fn nb_variables(&self) -> usize {
         self.mono_constraints.len()
+    }
+
+    fn add_coordinate(&mut self, definition: Vec2d<Expression>) {
+        if let Some(v) = &definition.x.variable {
+            assert!(v.index < self.nb_variables());
+        }
+        if let Some(v) = &definition.y.variable {
+            assert!(v.index < self.nb_variables());
+        }
+        self.coordinate_definitions.push(definition)
     }
 
     fn add_equality_constraint(
@@ -241,7 +251,7 @@ impl Add<i32> for Expression {
 }
 
 /// `min <= expr <= max`
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Constraint {
     bounds: RangeInclusive<i32>,
 }
