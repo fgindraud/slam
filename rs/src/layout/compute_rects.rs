@@ -49,7 +49,7 @@ pub fn compute_base_coordinates(
     Ok(Vec::new())
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct QpProblemState {
     coordinate_definitions: Vec<Vec2d<Expression>>,
     variables: Vec<MonoVariableConstraint>,
@@ -64,10 +64,10 @@ impl QpProblemState {
 
     fn add_equality_constraint(
         &mut self,
-        lhs: Expression,
-        rhs: Expression,
+        lhs: &Expression,
+        rhs: &Expression,
     ) -> Result<(), Infeasible> {
-        match (&lhs.variable, &rhs.variable) {
+        match (lhs.variable, rhs.variable) {
             (None, None) => {
                 if lhs.constant != rhs.constant {
                     Err(Infeasible)
@@ -76,13 +76,13 @@ impl QpProblemState {
                 }
             }
             (Some(var), None) => {
-                self.replace_variable_with_constant(*var, rhs.constant - lhs.constant)
+                self.replace_variable_with_constant(var, rhs.constant - lhs.constant)
             }
             (None, Some(var)) => {
-                self.replace_variable_with_constant(*var, lhs.constant - rhs.constant)
+                self.replace_variable_with_constant(var, lhs.constant - rhs.constant)
             }
             (Some(lhs_var), Some(rhs_var)) => {
-                self.merge_variables(*lhs_var, lhs.constant, *rhs_var, rhs.constant)
+                self.merge_variables(lhs_var, lhs.constant, rhs_var, rhs.constant)
             }
         }
     }
@@ -181,6 +181,7 @@ struct Variable {
 }
 
 /// `min <= variable <= max`
+#[derive(Debug, PartialEq, Eq)]
 struct MonoVariableConstraint {
     bounds: RangeInclusive<i32>,
 }
@@ -217,7 +218,7 @@ impl MonoVariableConstraint {
 }
 
 /// `constant [+ variable]`
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Expression {
     constant: i32,
     variable: Option<Variable>,
@@ -246,4 +247,111 @@ impl Add<i32> for &Expression {
             variable: self.variable.clone(),
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn test_qp_problem_replace_with_const() {
+    let mut problem = QpProblemState::default();
+    let coord0 = Vec2d::new(
+        &Expression::free_variable(&mut problem) + 40, // index 0
+        Expression::free_variable(&mut problem),       // index 1
+    );
+    let coord1 = Vec2d::new(
+        Expression {
+            constant: 0,
+            variable: coord0.x.variable.clone(), // index 0 multi use
+        },
+        Expression::constant(42),
+    );
+    problem.coordinate_definitions = vec![coord0, coord1];
+    problem.variables[0].bounds = -10..=10;
+    problem.variables[1].bounds = 0..=10;
+    // successful replacement
+    let replacement = problem.replace_variable_with_constant(Variable { index: 0 }, -10);
+    assert!(replacement.is_ok());
+    assert_eq!(
+        problem.coordinate_definitions[0].x,
+        Expression::constant(30)
+    );
+    assert_eq!(
+        problem.coordinate_definitions[0].y,
+        Expression {
+            constant: 0,
+            variable: Some(Variable { index: 0 }) // index shifted
+        }
+    );
+    assert_eq!(
+        problem.coordinate_definitions[1].x,
+        Expression::constant(-10)
+    );
+    // failed replacement (bounds)
+    let replacement = problem.replace_variable_with_constant(Variable { index: 0 }, -10);
+    assert!(replacement.is_err());
+}
+
+#[cfg(test)]
+#[test]
+fn test_qp_problem_merge_variables() {
+    let mut problem = QpProblemState::default();
+    let coord0 = Vec2d::new(
+        &Expression::free_variable(&mut problem) + 40, // index 0
+        Expression::free_variable(&mut problem),       // index 1
+    );
+    let coord1 = Vec2d::new(
+        Expression {
+            constant: 0,
+            variable: coord0.x.variable.clone(), // index 0 multi use
+        },
+        Expression::free_variable(&mut problem), // index 2
+    );
+    let coord2 = Vec2d::new(
+        Expression::free_variable(&mut problem), // index 3
+        Expression::free_variable(&mut problem), // index 4
+    );
+    problem.coordinate_definitions = vec![coord0, coord1, coord2];
+    problem.variables[1].bounds = -10..=10;
+    problem.variables[2].bounds = -10..=10;
+    problem.variables[3].bounds = 0..=10;
+    problem.variables[4].bounds = 0..=10;
+    // x = y + 10, {x,y} in [0,10] => x = 10, y = 0
+    let result = problem.add_equality_constraint(
+        &problem.coordinate_definitions[2].x.clone(),
+        &problem.coordinate_definitions[2].y.add(10),
+    );
+    assert!(result.is_ok());
+    assert_eq!(problem.variables.len(), 3);
+    assert_eq!(
+        problem.coordinate_definitions[2].x,
+        Expression::constant(10)
+    );
+    assert_eq!(problem.coordinate_definitions[2].y, Expression::constant(0));
+    // normal merge (0 with 1), shifts 2 -> 1.
+    // (0) + 40 == (1) + 10. bounds of (0) infinite so just reuse ones from 1
+    let result = problem.add_equality_constraint(
+        &problem.coordinate_definitions[0].x.clone(),
+        &problem.coordinate_definitions[0].y.add(10),
+    );
+    assert!(result.is_ok());
+    assert_eq!(
+        problem.coordinate_definitions[0].x,
+        Expression {
+            constant: 40,
+            variable: Some(Variable { index: 0 })
+        }
+    );
+    assert_eq!(problem.variables[0].bounds, -40..=-20);
+    assert_eq!(
+        problem.coordinate_definitions[0].y,
+        Expression {
+            constant: 30,
+            variable: Some(Variable { index: 0 })
+        }
+    );
+    // failed merge
+    let result = problem.add_equality_constraint(
+        &problem.coordinate_definitions[0].x.clone(),
+        &problem.coordinate_definitions[1].y.add(100),
+    );
+    assert!(result.is_err())
 }
