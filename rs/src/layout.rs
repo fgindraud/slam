@@ -141,14 +141,14 @@ impl Layout {
         // Infer relations and check layout
         let size = rects.len();
         let mut relations = RelationMatrix::new(size);
-        for lhs_id in 0..size {
-            let lhs_rect = &rects[lhs_id];
-            for rhs_id in (lhs_id + 1)..size {
-                let rhs_rect = &rects[rhs_id];
+        for rhs in 1..size {
+            let rhs_rect = &rects[rhs];
+            for lhs in 0..rhs {
+                let lhs_rect = &rects[lhs];
                 if lhs_rect.overlaps(rhs_rect) {
                     return Err(LayoutInferenceError::Overlap);
                 }
-                relations.set(lhs_id, rhs_id, Rect::adjacent_direction(lhs_rect, rhs_rect))
+                relations.set(lhs, rhs, Rect::adjacent_direction(lhs_rect, rhs_rect))
             }
         }
         if !relations.is_single_connected_component() {
@@ -214,6 +214,7 @@ mod compute_rects;
 /// Relations are only stored for `lhs < rhs` and is reversed if necessary, all to avoid redundant data.
 /// Relation with self are ignored, so it is not stored and always evaluate to [`None`].
 /// Invalid indexes will usually trigger a [`panic!`].
+/// Iteration on all pairs of indexes should iterate first on the high index and then low for performance.
 #[derive(Debug, Clone)]
 pub struct RelationMatrix<T> {
     size: usize,
@@ -275,10 +276,37 @@ impl<T: InvertibleRelation + Clone> RelationMatrix<T> {
             Ordering::Equal => (),
         }
     }
-}
 
-impl RelationMatrix<Direction> {
-    /// Check if all outputs are connected by direction relations.
+    /// Add a new element with no relations to other, at the end of indexes.
+    /// Returns the new index (equal to `size - 1`).
+    pub fn add_element(&mut self) -> usize {
+        let size = self.size;
+        self.array.resize(Self::buffer_size(size + 1), None);
+        self.size = size + 1;
+        size
+    }
+
+    /// Remove an element and all its relations.
+    /// All elements with higher indexes will be shifted by `-1`.
+    /// This matches use in [`compute_rects`].
+    pub fn remove_element(&mut self, index: usize) {
+        assert!(index < self.size);
+        // Shift values backward in holes left by removal in `self.array`.
+        let mut dest_buffer_index = (index * (index - 1)) / 2;
+        for high in (index + 1)..self.size {
+            for low in 0..high {
+                if low != index {
+                    let src_buffer_index = self.linearized_index(low, high);
+                    self.array[dest_buffer_index] = self.array[src_buffer_index].take();
+                    dest_buffer_index += 1;
+                }
+            }
+        }
+        self.size -= 1;
+        self.array.truncate(dest_buffer_index)
+    }
+
+    /// Check if all outputs are connected by relations.
     pub fn is_single_connected_component(&self) -> bool {
         // Union find structure with indexes : map[0..size] -> 0..size
         fn get_representative(map: &[usize], i: usize) -> usize {
@@ -293,8 +321,8 @@ impl RelationMatrix<Direction> {
         }
         let mut representatives = Vec::from_iter(0..self.size);
         // Start with all outputs as singular components. Merge them every time there is a relation.
-        for lhs in 0..self.size {
-            for rhs in (lhs + 1)..self.size {
+        for rhs in 1..self.size {
+            for lhs in 0..rhs {
                 if self.get(lhs, rhs).is_some() {
                     // Merge connected components towards min index.
                     let lhs = get_representative(&representatives, lhs);
@@ -337,7 +365,30 @@ fn test_relation_matrix_basic() {
     assert_eq!(matrix.get(2, 3), Some(Direction::LeftOf));
     assert_eq!(matrix.get(3, 2), Some(Direction::RightOf));
     matrix.set(3, 2, Some(Direction::Above));
-    assert_eq!(matrix.get(2, 3), Some(Direction::Under))
+    assert_eq!(matrix.get(2, 3), Some(Direction::Under));
+    // Add some more content
+    for (i, j) in [(0, 4), (4, 2), (2, 1), (1, 3)] {
+        matrix.set(i, j, Some(Direction::LeftOf))
+    }
+    // Remove and check that the matrix are the same if we skip the removed id.
+    let original = matrix.clone();
+    let removed_id = 3;
+    matrix.remove_element(removed_id);
+    assert_eq!(
+        matrix.array.len(),
+        RelationMatrix::<Direction>::buffer_size(matrix.size)
+    );
+    for lhs in 0..matrix.size {
+        for rhs in 0..matrix.size {
+            assert_eq!(
+                matrix.get(lhs, rhs),
+                original.get(
+                    lhs + if lhs >= removed_id { 1 } else { 0 },
+                    rhs + if rhs >= removed_id { 1 } else { 0 }
+                )
+            );
+        }
+    }
 }
 
 #[cfg(test)]
