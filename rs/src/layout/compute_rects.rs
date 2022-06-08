@@ -62,6 +62,12 @@ pub fn compute_base_coordinates(
 }
 
 #[derive(Debug)]
+/// Stores, preprocess and simplify constraints. Goals :
+/// - early detect of infeasible problems
+/// - merge equal variables
+///
+/// Not done : simplify singleton constraints into constant.
+/// Rationale : makes code too complex to be worth it, and done by the optimizer anyway.
 struct QpProblemState {
     /// List of expression of coordinates values.
     coordinate_definitions: Vec<Vec2d<Expression>>,
@@ -110,13 +116,10 @@ impl QpProblemState {
         rhs: Expression,
     ) -> Result<(), Infeasible> {
         match (lhs.variable, rhs.variable) {
-            (None, None) => {
-                if lhs.constant != rhs.constant {
-                    Err(Infeasible)
-                } else {
-                    Ok(())
-                }
-            }
+            (None, None) => match lhs.constant == rhs.constant {
+                true => Ok(()),
+                false => Err(Infeasible),
+            },
             (Some(var), None) => {
                 self.replace_variable_with_constant(var, rhs.constant - lhs.constant)
             }
@@ -135,17 +138,16 @@ impl QpProblemState {
         variable: Variable,
         constant: i32,
     ) -> Result<(), Infeasible> {
-        let vid = variable.index;
-        if !self.mono_constraints[vid].contains(constant) {
+        if !self.mono_constraints[variable.index].contains(constant) {
             return Err(Infeasible);
         }
         // Remove the variable, shifting all higher ids by -1, and fix definitions
-        self.mono_constraints.remove(vid);
+        self.mono_constraints.remove(variable.index);
         let fix_definition = |expr: &mut Expression| {
-            if let Some(variable) = &mut expr.variable {
-                if variable.index > vid {
-                    variable.index -= 1;
-                } else if variable.index == vid {
+            if let Some(expr_var) = &mut expr.variable {
+                if expr_var.index > variable.index {
+                    expr_var.index -= 1;
+                } else if expr_var.index == variable.index {
                     expr.constant += constant;
                     expr.variable = None;
                 }
@@ -181,20 +183,10 @@ impl QpProblemState {
             }
         };
         // Update variable constraints
-        let merged_kept_constraint = Constraint::merge(
+        self.mono_constraints[kept.index] = Constraint::merge(
             &self.mono_constraints[kept.index],
             &self.mono_constraints[removed.index].add(-kept_offset),
         )?;
-        match merged_kept_constraint {
-            Simplification::Constraint(constraint) => {
-                self.mono_constraints[kept.index] = constraint
-            }
-            Simplification::Singleton(value) => {
-                // value == kept == removed - kept_offset
-                self.replace_variable_with_constant(removed, value + kept_offset)?;
-                return self.replace_variable_with_constant(kept, value);
-            }
-        }
         // Remove the variable, shifting all higher ids by -1, and fix definitions (removed -> kept + kept_offset)
         self.mono_constraints.remove(removed.index);
         let fix_definition = |expr: &mut Expression| {
@@ -258,11 +250,6 @@ struct Constraint {
     max: i32,
 }
 
-enum Simplification {
-    Constraint(Constraint),
-    Singleton(i32),
-}
-
 impl Constraint {
     fn new(min: i32, max: i32) -> Constraint {
         Constraint { min, max }
@@ -278,17 +265,13 @@ impl Constraint {
         self.min <= i32::MIN / 2 && self.max >= i32::MAX
     }
 
-    fn simplify(min: i32, max: i32) -> Result<Simplification, Infeasible> {
-        match Ord::cmp(&min, &max) {
-            Ordering::Less => Ok(Simplification::Constraint(Constraint { min, max })),
-            Ordering::Equal => Ok(Simplification::Singleton(min)),
-            Ordering::Greater => Err(Infeasible),
-        }
-    }
-    fn merge(&self, other: &Constraint) -> Result<Simplification, Infeasible> {
+    fn merge(&self, other: &Constraint) -> Result<Constraint, Infeasible> {
         let min = std::cmp::max(self.min, other.min);
         let max = std::cmp::min(self.max, other.max);
-        Constraint::simplify(min, max)
+        match Ord::cmp(&min, &max) {
+            Ordering::Greater => Err(Infeasible),
+            _ => Ok(Constraint { min, max }),
+        }
     }
 }
 
@@ -378,18 +361,30 @@ fn test_qp_problem_merge_variables() {
     problem.mono_constraints[2] = Constraint::new(-10, 10);
     problem.mono_constraints[3] = Constraint::new(0, 10);
     problem.mono_constraints[4] = Constraint::new(0, 10);
-    // x = y + 10, {x,y} in [0,10] => x = 10, y = 0
+    // x = y + 10, {x,y} in [0,10] => x = 10, y = 0, but no simplification
     let result = problem.add_equality_constraint(
         problem.coordinate_definitions[2].x.clone(),
         problem.coordinate_definitions[2].y.clone() + 10,
     );
     assert!(result.is_ok());
-    assert_eq!(problem.mono_constraints.len(), 3);
     assert_eq!(
         problem.coordinate_definitions[2].x,
-        Expression::constant(10)
+        Expression {
+            constant: 0,
+            variable: Some(Variable { index: 3 })
+        }
     );
-    assert_eq!(problem.coordinate_definitions[2].y, Expression::constant(0));
+    assert_eq!(
+        problem.coordinate_definitions[2].y,
+        Expression {
+            constant: -10,
+            variable: Some(Variable { index: 3 })
+        }
+    );
+    assert_eq!(
+        problem.mono_constraints[3].min,
+        problem.mono_constraints[3].max
+    );
     // normal merge (0 with 1), shifts 2 -> 1.
     // (0) + 40 == (1) + 10. bounds of (0) infinite so just reuse ones from 1
     let result = problem.add_equality_constraint(
