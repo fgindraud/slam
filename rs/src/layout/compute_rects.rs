@@ -37,28 +37,56 @@ pub fn compute_base_coordinates(
     for rhs in 0..n_outputs {
         for lhs in 0..rhs {
             if let Some(relation) = relations.get(lhs, rhs) {
-                let lhs_coord = problem.coordinate_definitions[lhs].clone();
-                let rhs_coord = problem.coordinate_definitions[rhs].clone();
                 match relation {
-                    // TODO bi constraints for ortho direction
-                    Direction::LeftOf => {
-                        problem.add_equality_constraint(lhs_coord.x + sizes[lhs].x, rhs_coord.x)?
-                    }
-                    Direction::RightOf => {
-                        problem.add_equality_constraint(lhs_coord.x, rhs_coord.x + sizes[rhs].x)?
-                    }
-                    Direction::Under => {
-                        problem.add_equality_constraint(lhs_coord.y + sizes[lhs].y, rhs_coord.y)?
-                    }
-                    Direction::Above => {
-                        problem.add_equality_constraint(lhs_coord.y, rhs_coord.y + sizes[rhs].y)?
-                    }
+                    Direction::LeftOf => add_leftof_relation(&mut problem, lhs, rhs, &sizes)?,
+                    Direction::RightOf => add_leftof_relation(&mut problem, rhs, lhs, &sizes)?,
+                    Direction::Under => add_under_relation(&mut problem, lhs, rhs, &sizes)?,
+                    Direction::Above => add_under_relation(&mut problem, rhs, lhs, &sizes)?,
                 }
             }
         }
     }
+    // TODO maybe post simplify singleton constraints
 
     Ok(Vec::new())
+}
+
+// Helpers that are used twice each (LeftOf+RightOf, Above+Under)
+fn add_leftof_relation(
+    problem: &mut QpProblemState,
+    left: usize,
+    right: usize,
+    sizes: &[Vec2di],
+) -> Result<(), Infeasible> {
+    // left.x + left.sx = right.x
+    problem.add_equality_constraint(
+        problem.coordinate_definitions[left].x.clone() + sizes[left].x,
+        problem.coordinate_definitions[right].x.clone(),
+    )?;
+    // left.y - right.sy <= right.y <= left.y + lhs.sy
+    problem.add_dual_constraint(
+        problem.coordinate_definitions[left].y.clone(),
+        problem.coordinate_definitions[right].y.clone(),
+        Constraint::new(-sizes[right].y, sizes[left].y),
+    )
+}
+fn add_under_relation(
+    problem: &mut QpProblemState,
+    under: usize,
+    above: usize,
+    sizes: &[Vec2di],
+) -> Result<(), Infeasible> {
+    // under.y + under.sy = above.y
+    problem.add_equality_constraint(
+        problem.coordinate_definitions[under].y.clone() + sizes[under].y,
+        problem.coordinate_definitions[above].y.clone(),
+    )?;
+    // under.x - above.sx <= above.x <= under.x + under.sx
+    problem.add_dual_constraint(
+        problem.coordinate_definitions[under].x.clone(),
+        problem.coordinate_definitions[above].x.clone(),
+        Constraint::new(-sizes[above].x, sizes[under].x),
+    )
 }
 
 #[derive(Debug)]
@@ -108,6 +136,48 @@ impl QpProblemState {
             assert!(v.index < self.nb_variables());
         }
         self.coordinate_definitions.push(definition)
+    }
+
+    // min <= pos - neg <= max
+    fn add_dual_constraint(
+        &mut self,
+        neg: Expression,
+        pos: Expression,
+        constraint: Constraint,
+    ) -> Result<(), Infeasible> {
+        match (neg.variable, pos.variable) {
+            (None, None) => {
+                if !constraint.contains(pos.constant - neg.constant) {
+                    return Err(Infeasible);
+                }
+            }
+            (None, Some(pos_var)) => {
+                // min <= pos_var + pos_cst - neg_cst <= max
+                self.mono_constraints[pos_var.index] = Constraint::merge(
+                    &self.mono_constraints[pos_var.index],
+                    &constraint.add(neg.constant - pos.constant),
+                )?;
+            }
+            (Some(neg_var), None) => {
+                // min <= pos_cst - neg_cst - neg_var <= max
+                // -max + pos_cst - neg_cst <= neg_var <= -min + pos_cst - neg_cst
+                self.mono_constraints[neg_var.index] = Constraint::merge(
+                    &self.mono_constraints[neg_var.index],
+                    &constraint.inverse().add(pos.constant - neg.constant),
+                )?;
+            }
+            (Some(neg_var), Some(pos_var)) => {
+                // min <= pos_cst + pos_var - neg_cst - neg_var <= max
+                let constraint = constraint.add(neg.constant - pos.constant);
+                let merged = match self.dual_constraints.get(neg_var.index, pos_var.index) {
+                    None => constraint,
+                    Some(old_constraint) => Constraint::merge(&constraint, &old_constraint)?,
+                };
+                self.dual_constraints
+                    .set(neg_var.index, pos_var.index, Some(merged));
+            }
+        }
+        Ok(())
     }
 
     fn add_equality_constraint(
