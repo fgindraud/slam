@@ -1,7 +1,7 @@
 use super::RelationMatrix;
 use crate::geometry::{Direction, InvertibleRelation, Vec2d, Vec2di};
 use std::cmp::Ordering;
-use std::ops::{Add, RangeInclusive};
+use std::ops::Add;
 
 pub struct Infeasible;
 
@@ -84,7 +84,9 @@ impl QpProblemState {
 
     fn new_variable(&mut self) -> Variable {
         let index = self.mono_constraints.len();
-        self.mono_constraints.push(Constraint::default());
+        self.mono_constraints.push(Constraint::unconstrained());
+        let dc_index = self.dual_constraints.add_element();
+        debug_assert_eq!(dc_index, index);
         Variable { index }
     }
 
@@ -134,7 +136,7 @@ impl QpProblemState {
         constant: i32,
     ) -> Result<(), Infeasible> {
         let vid = variable.index;
-        if !self.mono_constraints[vid].bounds.contains(&constant) {
+        if !self.mono_constraints[vid].contains(constant) {
             return Err(Infeasible);
         }
         // Remove the variable, shifting all higher ids by -1, and fix definitions
@@ -179,21 +181,20 @@ impl QpProblemState {
             }
         };
         // Update variable constraints
-        let updated_kept_constraint = Constraint::merge(
+        let merged_kept_constraint = Constraint::merge(
             &self.mono_constraints[kept.index],
             &self.mono_constraints[removed.index].add(-kept_offset),
-        );
-        let (min, max) = updated_kept_constraint.bounds.clone().into_inner();
-        match Ord::cmp(&min, &max) {
-            Ordering::Less => (),
-            Ordering::Greater => return Err(Infeasible),
-            Ordering::Equal => {
-                // min == kept == removed - kept_offset
-                self.replace_variable_with_constant(removed, min + kept_offset)?;
-                return self.replace_variable_with_constant(kept, min);
+        )?;
+        match merged_kept_constraint {
+            Simplification::Constraint(constraint) => {
+                self.mono_constraints[kept.index] = constraint
+            }
+            Simplification::Singleton(value) => {
+                // value == kept == removed - kept_offset
+                self.replace_variable_with_constant(removed, value + kept_offset)?;
+                return self.replace_variable_with_constant(kept, value);
             }
         }
-        self.mono_constraints[kept.index] = updated_kept_constraint;
         // Remove the variable, shifting all higher ids by -1, and fix definitions (removed -> kept + kept_offset)
         self.mono_constraints.remove(removed.index);
         let fix_definition = |expr: &mut Expression| {
@@ -253,14 +254,41 @@ impl Add<i32> for Expression {
 /// `min <= expr <= max`
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Constraint {
-    bounds: RangeInclusive<i32>,
+    min: i32,
+    max: i32,
 }
 
-impl Default for Constraint {
-    fn default() -> Self {
-        Constraint {
-            bounds: i32::MIN..=i32::MAX,
+enum Simplification {
+    Constraint(Constraint),
+    Singleton(i32),
+}
+
+impl Constraint {
+    fn new(min: i32, max: i32) -> Constraint {
+        Constraint { min, max }
+    }
+    fn unconstrained() -> Constraint {
+        Constraint::new(i32::MIN, i32::MAX)
+    }
+
+    fn contains(&self, value: i32) -> bool {
+        self.min <= value && value <= self.max
+    }
+    fn is_unconstrained(&self) -> bool {
+        self.min <= i32::MIN / 2 && self.max >= i32::MAX
+    }
+
+    fn simplify(min: i32, max: i32) -> Result<Simplification, Infeasible> {
+        match Ord::cmp(&min, &max) {
+            Ordering::Less => Ok(Simplification::Constraint(Constraint { min, max })),
+            Ordering::Equal => Ok(Simplification::Singleton(min)),
+            Ordering::Greater => Err(Infeasible),
         }
+    }
+    fn merge(&self, other: &Constraint) -> Result<Simplification, Infeasible> {
+        let min = std::cmp::max(self.min, other.min);
+        let max = std::cmp::min(self.max, other.max);
+        Constraint::simplify(min, max)
     }
 }
 
@@ -268,21 +296,8 @@ impl<'a> Add<i32> for &'a Constraint {
     type Output = Constraint;
     fn add(self, rhs: i32) -> Constraint {
         Constraint {
-            bounds: RangeInclusive::new(
-                self.bounds.start().saturating_add(rhs),
-                self.bounds.end().saturating_add(rhs),
-            ),
-        }
-    }
-}
-
-impl Constraint {
-    fn merge(&self, other: &Constraint) -> Constraint {
-        Constraint {
-            bounds: RangeInclusive::new(
-                std::cmp::max(*self.bounds.start(), *other.bounds.start()),
-                std::cmp::min(*self.bounds.end(), *other.bounds.end()),
-            ),
+            min: self.min.saturating_add(rhs),
+            max: self.max.saturating_add(rhs),
         }
     }
 }
@@ -291,8 +306,10 @@ impl Constraint {
 /// `min <= rhs - lhs <= max` <=> `-max <= lhs - rhs <= -min`.
 impl InvertibleRelation for Constraint {
     fn inverse(&self) -> Self {
-        let bounds = RangeInclusive::new(-self.bounds.end(), -self.bounds.start());
-        Constraint { bounds }
+        Constraint {
+            min: self.max.saturating_neg(),
+            max: self.min.saturating_neg(),
+        }
     }
 }
 
@@ -312,8 +329,8 @@ fn test_qp_problem_replace_with_const() {
         Expression::constant(42),
     );
     problem.coordinate_definitions = vec![coord0, coord1];
-    problem.mono_constraints[0].bounds = -10..=10;
-    problem.mono_constraints[1].bounds = 0..=10;
+    problem.mono_constraints[0] = Constraint::new(-10, 10);
+    problem.mono_constraints[1] = Constraint::new(0, 10);
     // successful replacement
     let replacement = problem.replace_variable_with_constant(Variable { index: 0 }, -10);
     assert!(replacement.is_ok());
@@ -357,10 +374,10 @@ fn test_qp_problem_merge_variables() {
         Expression::free_variable(&mut problem), // index 4
     );
     problem.coordinate_definitions = vec![coord0, coord1, coord2];
-    problem.mono_constraints[1].bounds = -10..=10;
-    problem.mono_constraints[2].bounds = -10..=10;
-    problem.mono_constraints[3].bounds = 0..=10;
-    problem.mono_constraints[4].bounds = 0..=10;
+    problem.mono_constraints[1] = Constraint::new(-10, 10);
+    problem.mono_constraints[2] = Constraint::new(-10, 10);
+    problem.mono_constraints[3] = Constraint::new(0, 10);
+    problem.mono_constraints[4] = Constraint::new(0, 10);
     // x = y + 10, {x,y} in [0,10] => x = 10, y = 0
     let result = problem.add_equality_constraint(
         problem.coordinate_definitions[2].x.clone(),
@@ -387,7 +404,7 @@ fn test_qp_problem_merge_variables() {
             variable: Some(Variable { index: 0 })
         }
     );
-    assert_eq!(problem.mono_constraints[0].bounds, -40..=-20);
+    assert_eq!(problem.mono_constraints[0], Constraint::new(-40, -20));
     assert_eq!(
         problem.coordinate_definitions[0].y,
         Expression {
