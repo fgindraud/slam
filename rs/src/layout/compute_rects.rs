@@ -211,6 +211,15 @@ impl QpProblemState {
         if !self.mono_constraints[variable.index].contains(constant) {
             return Err(Infeasible);
         }
+        // convert dual constraints
+        for pos_var in 0..self.nb_variables() {
+            if let Some(constraint) = self.dual_constraints.get(variable.index, pos_var) {
+                // min <= pos_var - variable <= max
+                self.mono_constraints[pos_var] =
+                    Constraint::merge(&self.mono_constraints[pos_var], &constraint.add(constant))?
+            }
+        }
+        self.dual_constraints.remove_element(variable.index);
         // Remove the variable, shifting all higher ids by -1, and fix definitions
         self.mono_constraints.remove(variable.index);
         let fix_definition = |expr: &mut Expression| {
@@ -227,7 +236,6 @@ impl QpProblemState {
             fix_definition(&mut definition.x);
             fix_definition(&mut definition.y);
         }
-        // TODO multi constraints
         Ok(())
     }
 
@@ -252,11 +260,32 @@ impl QpProblemState {
                 };
             }
         };
-        // Update variable constraints
+        // Update mono constraints
         self.mono_constraints[kept.index] = Constraint::merge(
             &self.mono_constraints[kept.index],
             &self.mono_constraints[removed.index].add(-kept_offset),
         )?;
+        // multi constraints : check infeasability of (kept, removed), convert (removed -> kept, x), then remove
+        if let Some(constraint) = self.dual_constraints.get(kept.index, removed.index) {
+            // min <= removed - kept <= max, with removed = kept + kept_offset
+            if !constraint.contains(kept_offset) {
+                return Err(Infeasible);
+            }
+            self.dual_constraints.set(kept.index, removed.index, None)
+        }
+        for pos_var in 0..self.nb_variables() {
+            // min <= pos_var - removed <= max, with removed = kept + kept_offsey
+            if let Some(constraint) = self.dual_constraints.get(removed.index, pos_var) {
+                // min <= pos_var - kept <= max
+                let kept_constraint = constraint.add(kept_offset);
+                let merged = match self.dual_constraints.get(kept.index, pos_var) {
+                    None => kept_constraint,
+                    Some(old_constraint) => Constraint::merge(&kept_constraint, &old_constraint)?,
+                };
+                self.dual_constraints.set(kept.index, pos_var, Some(merged))
+            }
+        }
+        self.dual_constraints.remove_element(removed.index);
         // Remove the variable, shifting all higher ids by -1, and fix definitions (removed -> kept + kept_offset)
         self.mono_constraints.remove(removed.index);
         let fix_definition = |expr: &mut Expression| {
@@ -273,7 +302,6 @@ impl QpProblemState {
             fix_definition(&mut definition.x);
             fix_definition(&mut definition.y);
         }
-        // TODO multi constraints
         Ok(())
     }
 }
@@ -384,6 +412,12 @@ fn test_qp_problem_replace_with_const() {
     problem.coordinate_definitions = vec![coord0, coord1];
     problem.mono_constraints[0] = Constraint::new(-10, 10);
     problem.mono_constraints[1] = Constraint::new(0, 10);
+    let add_constraint = problem.add_dual_constraint(
+        problem.coordinate_definitions[0].x.clone(),
+        problem.coordinate_definitions[0].y.clone(),
+        Constraint::new(-100, 100),
+    );
+    assert!(add_constraint.is_ok());
     // successful replacement
     let replacement = problem.replace_variable_with_constant(Variable { index: 0 }, -10);
     assert!(replacement.is_ok());
@@ -405,6 +439,8 @@ fn test_qp_problem_replace_with_const() {
     // failed replacement (bounds)
     let replacement = problem.replace_variable_with_constant(Variable { index: 0 }, -10);
     assert!(replacement.is_err());
+
+    assert_eq!(problem.nb_variables(), problem.dual_constraints.size());
 }
 
 #[cfg(test)]
@@ -431,6 +467,12 @@ fn test_qp_problem_merge_variables() {
     problem.mono_constraints[2] = Constraint::new(-10, 10);
     problem.mono_constraints[3] = Constraint::new(0, 10);
     problem.mono_constraints[4] = Constraint::new(0, 10);
+    let result = problem.add_dual_constraint(
+        problem.coordinate_definitions[0].x.clone(), // index 0
+        problem.coordinate_definitions[2].y.clone(), // index 4
+        Constraint::new(0, 100),
+    );
+    assert!(result.is_ok());
     // x = y + 10, {x,y} in [0,10] => x = 10, y = 0, but no simplification
     let result = problem.add_equality_constraint(
         problem.coordinate_definitions[2].x.clone(),
@@ -454,6 +496,10 @@ fn test_qp_problem_merge_variables() {
     assert_eq!(
         problem.mono_constraints[3].min,
         problem.mono_constraints[3].max
+    );
+    assert_eq!(
+        problem.dual_constraints.get(0, 3),
+        Some(Constraint::new(50, 150))
     );
     // normal merge (0 with 1), shifts 2 -> 1.
     // (0) + 40 == (1) + 10. bounds of (0) infinite so just reuse ones from 1
@@ -482,5 +528,7 @@ fn test_qp_problem_merge_variables() {
         problem.coordinate_definitions[0].x.clone(),
         problem.coordinate_definitions[1].y.clone() + 100,
     );
-    assert!(result.is_err())
+    assert!(result.is_err());
+
+    assert_eq!(problem.nb_variables(), problem.dual_constraints.size())
 }

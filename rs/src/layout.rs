@@ -292,7 +292,7 @@ impl<T: InvertibleRelation + Clone> RelationMatrix<T> {
     pub fn remove_element(&mut self, index: usize) {
         assert!(index < self.size);
         // Shift values backward in holes left by removal in `self.array`.
-        let mut dest_buffer_index = (index * (index - 1)) / 2;
+        let mut dest_buffer_index = (index * (index.saturating_sub(1))) / 2;
         for high in (index + 1)..self.size {
             for low in 0..high {
                 if low != index {
