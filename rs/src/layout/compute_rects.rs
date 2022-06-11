@@ -1,7 +1,7 @@
 use super::RelationMatrix;
 use crate::geometry::{Direction, InvertibleRelation, Vec2d, Vec2di};
 use std::cmp::Ordering;
-use std::ops::Add;
+use std::ops::{Add, AddAssign, Mul};
 
 pub struct Infeasible;
 
@@ -88,6 +88,128 @@ fn add_under_relation(
         Constraint::new(-sizes[above].x, sizes[under].x),
     )
 }
+
+///////////////////////////////////////////////////////////////////////////////
+
+/// Input matrices for an [`osqp`] problem.
+struct QpMatrices {
+    // Criterion xpx + 2xq
+    p: SquareMatrix<f64>,
+    q: Vec<f64>,
+    // constraints l <= ax <= u
+    a: SquareMatrix<f64>,
+    l: Vec<f64>,
+    u: Vec<f64>,
+}
+
+fn compute_qp_matrices(problem: &QpProblemState, sizes: &[Vec2di]) -> QpMatrices {
+    let n = problem.nb_variables();
+    // criteria = sum(distance_of_output_center_to_barycenter^2), with barycenter of centers using output area as weights.
+    // base coordinates = (x_i, y_i). sizes = (sx_i, syi). weights a_i = sx_i * sy_i.
+    // using centers c_i = (x_i + sx_i / 2, y_i + sy_i / 2), barycenter : (sum_i a_i) b = sum_i a_i c_i.
+    // min obj = sum_i dist(c_i, b)^2 <=> sum_i | sum_j a_j (c_i - c_j) |^2 = sum_i V_i (for short)
+    // V_i = (sum_j a_j (x_i + sx_i/2 - x_j - sx_j/2))^2 + (sum_j a_j (y_i + sy_i/2 - y_j - sy_j/2))^2
+    // Looking only at x (mirror of y) : sum_j a_j (x_i + sx_i/2 - x_j - sx_j/2 = X^T * [C:1d array] + c: constant.
+    // Thus (sum_j a_j (x_i + sx_i/2 - x_j - sx_j/2))^2 = (X^T C + c)^2 = X^T (C C^T) X + 2 c C^T X + c^2.
+    // For minimized objective in osqp, p += C C^T, q += c C, and c^2 is ignored.
+    let mut p = SquareMatrix::new(n, 0.);
+    let mut q = vec![0.; n];
+    fn accumulate_C_c(
+        c_array: &mut [f64],
+        c: &mut f64,
+        a_j: f64,
+        pos: Expression,
+        neg: Expression,
+    ) {
+        if let Some(variable) = pos.variable {
+            c_array[variable.index] += a_j;
+        }
+        if let Some(variable) = neg.variable {
+            c_array[variable.index] -= a_j;
+        }
+        *c += a_j * f64::from(pos.constant - neg.constant);
+    }
+    for i in 0..n {
+        let size_i = &sizes[i];
+        let coord_i = &problem.coordinate_definitions[i];
+        let mut c_array_x = vec![0.; n];
+        let mut c_x = 0.;
+        let mut c_array_y = vec![0.; n];
+        let mut c_y = 0.;
+        for j in 0..n {
+            let size_j = &sizes[j];
+            let coord_j = &problem.coordinate_definitions[j];
+            let a_j = f64::from(size_j.x * size_j.y);
+            accumulate_C_c(
+                &mut c_array_x,
+                &mut c_x,
+                a_j,
+                coord_i.x.clone() + size_i.x / 2,
+                coord_j.x.clone() + size_j.x / 2,
+            );
+            accumulate_C_c(
+                &mut c_array_y,
+                &mut c_y,
+                a_j,
+                coord_i.y.clone() + size_i.y / 2,
+                coord_j.y.clone() + size_j.y / 2,
+            )
+        }
+        p.add_vt_v(&c_array_x);
+        add_a_times_array(&mut q, c_x, &c_array_x);
+        p.add_vt_v(&c_array_y);
+        add_a_times_array(&mut q, c_y, &c_array_y);
+    }
+    // Constraints
+    let (a, l, u) = todo!();
+    QpMatrices { p, q, a, l, u }
+}
+
+fn add_a_times_array(acc: &mut [f64], a: f64, array: &[f64]) {
+    assert_eq!(acc.len(), array.len());
+    for i in 0..acc.len() {
+        acc[i] += a * array[i]
+    }
+}
+
+#[derive(Debug, Clone)]
+/// Column-major ordered matrix.
+struct SquareMatrix<T> {
+    size: usize,
+    array: Vec<T>,
+}
+
+impl<T> SquareMatrix<T> {
+    fn new(size: usize, value: T) -> Self
+    where
+        T: Clone,
+    {
+        let array = vec![value; size * size];
+        Self { size, array }
+    }
+    fn linearized_index(&self, coord: (usize, usize)) -> usize {
+        assert!(coord.0 < self.size);
+        assert!(coord.1 < self.size);
+        (coord.1 * self.size) + coord.0
+    }
+    fn column_major_array<'a>(&'a self) -> &'a [T] {
+        &self.array
+    }
+    fn add_vt_v(&mut self, v: &[T])
+    where
+        T: Copy + Mul<Output = T> + AddAssign,
+    {
+        assert_eq!(self.size, v.len());
+        for c1 in 0..self.size {
+            for c0 in 0..self.size {
+                let index = self.linearized_index((c0, c1));
+                self.array[index] += v[c1] * v[c0];
+            }
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
 /// Stores, preprocess and simplify constraints. Goals :
