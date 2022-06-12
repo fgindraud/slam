@@ -2,6 +2,7 @@ use super::RelationMatrix;
 use crate::geometry::{Direction, InvertibleRelation, Vec2d, Vec2di};
 use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, Mul};
+use std::time::Duration;
 
 pub struct Infeasible;
 
@@ -47,6 +48,10 @@ pub fn compute_base_coordinates(
         }
     }
     // TODO maybe post simplify singleton constraints
+    let settings = osqp::Settings::default()
+        .verbose(true) // Temporary
+        .time_limit(Some(Duration::from_secs(1)));
+    let problem = create_qp_problem(&problem, sizes, &settings).unwrap();
 
     Ok(Vec::new())
 }
@@ -91,18 +96,12 @@ fn add_under_relation(
 
 ///////////////////////////////////////////////////////////////////////////////
 
-/// Input matrices for an [`osqp`] problem.
-struct QpMatrices {
-    // Criterion xpx + 2xq
-    p: SquareMatrix<f64>,
-    q: Vec<f64>,
-    // constraints l <= ax <= u
-    a: SquareMatrix<f64>,
-    l: Vec<f64>,
-    u: Vec<f64>,
-}
-
-fn compute_qp_matrices(problem: &QpProblemState, sizes: &[Vec2di]) -> QpMatrices {
+/// Compute input matrices for an [`osqp`] problem and initialize it.
+fn create_qp_problem(
+    problem: &QpProblemState,
+    sizes: &[Vec2di],
+    settings: &osqp::Settings,
+) -> Result<osqp::Problem, osqp::SetupError> {
     let n = problem.nb_variables();
     // criteria = sum(distance_of_output_center_to_barycenter^2), with barycenter of centers using output area as weights.
     // base coordinates = (x_i, y_i). sizes = (sx_i, syi). weights a_i = sx_i * sy_i.
@@ -112,7 +111,7 @@ fn compute_qp_matrices(problem: &QpProblemState, sizes: &[Vec2di]) -> QpMatrices
     // Looking only at x (mirror of y) : sum_j a_j (x_i + sx_i/2 - x_j - sx_j/2 = X^T * [C:1d array] + c: constant.
     // Thus (sum_j a_j (x_i + sx_i/2 - x_j - sx_j/2))^2 = (X^T C + c)^2 = X^T (C C^T) X + 2 c C^T X + c^2.
     // For minimized objective in osqp, p += C C^T, q += c C, and c^2 is ignored.
-    let mut p = SquareMatrix::new(n, 0.);
+    let mut p = RowMatrix::square(n, 0.);
     let mut q = vec![0.; n];
     fn accumulate_C_c(
         c_array: &mut [f64],
@@ -160,9 +159,30 @@ fn compute_qp_matrices(problem: &QpProblemState, sizes: &[Vec2di]) -> QpMatrices
         p.add_vt_v(&c_array_y);
         add_a_times_array(&mut q, c_y, &c_array_y);
     }
-    // Constraints
-    let (a, l, u) = todo!();
-    QpMatrices { p, q, a, l, u }
+    // Constraints : l <= Ax <= u
+    let mut a = RowMatrix::empty(n);
+    let (mut l, mut u) = (Vec::new(), Vec::new());
+    for (variable, constraint) in problem.mono_constraints.iter().enumerate() {
+        if !constraint.is_unconstrained() {
+            a.add_row((0..n).map(|i| if i == variable { 1. } else { 0. }));
+            l.push(f64::from(constraint.min));
+            u.push(f64::from(constraint.max))
+        }
+    }
+    for pos in 0..n {
+        for neg in 0..pos {
+            if let Some(constraint) = problem.dual_constraints.get(neg, pos) {
+                a.add_row((0..n).map(|i| match i {
+                    i if i == pos => 1.,
+                    i if i == neg => -1.,
+                    _ => 0.,
+                }));
+                l.push(f64::from(constraint.min));
+                u.push(f64::from(constraint.max))
+            }
+        }
+    }
+    osqp::Problem::new(&p, &q, &a, &l, &u, settings)
 }
 
 fn add_a_times_array(acc: &mut [f64], a: f64, array: &[f64]) {
@@ -173,39 +193,66 @@ fn add_a_times_array(acc: &mut [f64], a: f64, array: &[f64]) {
 }
 
 #[derive(Debug, Clone)]
-/// Column-major ordered matrix.
-struct SquareMatrix<T> {
-    size: usize,
+/// Row-major ordered matrix.
+struct RowMatrix<T> {
+    nrow: usize,
+    ncol: usize,
     array: Vec<T>,
 }
 
-impl<T> SquareMatrix<T> {
-    fn new(size: usize, value: T) -> Self
+impl<T> RowMatrix<T> {
+    fn empty(ncol: usize) -> Self {
+        Self {
+            nrow: 0,
+            ncol,
+            array: Vec::new(),
+        }
+    }
+    fn square(size: usize, value: T) -> Self
     where
         T: Clone,
     {
-        let array = vec![value; size * size];
-        Self { size, array }
+        Self {
+            nrow: size,
+            ncol: size,
+            array: vec![value; size * size],
+        }
     }
-    fn linearized_index(&self, coord: (usize, usize)) -> usize {
-        assert!(coord.0 < self.size);
-        assert!(coord.1 < self.size);
-        (coord.1 * self.size) + coord.0
+    fn linearized_index(&self, row: usize, col: usize) -> usize {
+        assert!(row < self.nrow);
+        assert!(col < self.ncol);
+        (row * self.ncol) + col
     }
-    fn column_major_array<'a>(&'a self) -> &'a [T] {
+    fn row_major_array<'a>(&'a self) -> &'a [T] {
         &self.array
     }
     fn add_vt_v(&mut self, v: &[T])
     where
         T: Copy + Mul<Output = T> + AddAssign,
     {
-        assert_eq!(self.size, v.len());
-        for c1 in 0..self.size {
-            for c0 in 0..self.size {
-                let index = self.linearized_index((c0, c1));
-                self.array[index] += v[c1] * v[c0];
+        assert_eq!(self.nrow, self.ncol);
+        assert_eq!(self.nrow, v.len());
+        for row in 0..self.nrow {
+            for col in 0..self.ncol {
+                let index = self.linearized_index(row, col);
+                self.array[index] += v[row] * v[col];
             }
         }
+    }
+    fn add_row<I: Iterator<Item = T>>(&mut self, iterator: I) {
+        self.nrow += 1;
+        self.array.extend(iterator.take(self.ncol));
+        assert_eq!(self.ncol * self.nrow, self.array.len())
+    }
+}
+
+impl<'m> From<&'m RowMatrix<f64>> for osqp::CscMatrix<'static> {
+    fn from(matrix: &'m RowMatrix<f64>) -> Self {
+        osqp::CscMatrix::from_row_iter_dense(
+            matrix.nrow,
+            matrix.ncol,
+            matrix.row_major_array().into_iter().cloned(),
+        )
     }
 }
 
