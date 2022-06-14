@@ -1,6 +1,7 @@
 #![allow(dead_code)] // Testing only part of the code.
 
-use slam::geometry::{Rect, Vec2di};
+use slam::geometry::{Rect, Transform, Vec2di};
+use slam::layout::{Edid, EnabledOutput, Layout, Mode};
 
 // Palette with evenly distributed hues
 fn color_palette(n: usize) -> impl Iterator<Item = tiny_skia::Color> {
@@ -17,13 +18,14 @@ fn color_palette(n: usize) -> impl Iterator<Item = tiny_skia::Color> {
 }
 
 fn boundary_rect(rects: &[Rect]) -> Rect {
+    assert!(!rects.is_empty());
     let bottom_left = Vec2di {
-        x: rects.iter().map(|r| r.bottom_left.x).min().unwrap_or(0),
-        y: rects.iter().map(|r| r.bottom_left.y).min().unwrap_or(0),
+        x: rects.iter().map(|r| r.bottom_left.x).min().unwrap(),
+        y: rects.iter().map(|r| r.bottom_left.y).min().unwrap(),
     };
     let top_right = Vec2di {
-        x: rects.iter().map(|r| r.top_right().x).max().unwrap_or(0),
-        y: rects.iter().map(|r| r.top_right().y).max().unwrap_or(0),
+        x: rects.iter().map(|r| r.top_right().x).max().unwrap(),
+        y: rects.iter().map(|r| r.top_right().y).max().unwrap(),
     };
     Rect {
         bottom_left,
@@ -59,16 +61,47 @@ fn draw_layout(png_path: &std::path::Path, rects: &[Rect]) {
 }
 
 fn main() {
-    let origin = Vec2di::default();
     let rects = [
         Rect {
-            bottom_left: origin,
+            bottom_left: Vec2di::default(),
             size: Vec2di::new(640, 480),
         },
         Rect {
-            bottom_left: origin + Vec2di::new(640, 0),
+            bottom_left: Vec2di::new(640, 0),
             size: Vec2di::new(320, 240),
         },
     ];
-    draw_layout(std::path::Path::new("test.png"), &rects)
+    draw_layout(std::path::Path::new("static.png"), &rects);
+
+    let layout = Layout::from_output_and_rects(
+        Box::new([]),
+        rects
+            .iter()
+            .enumerate()
+            .map(|(fake_id, rect)| {
+                (
+                    EnabledOutput::Edid {
+                        edid: Edid::from(u64::try_from(fake_id).unwrap()),
+                        transform: Transform::default(),
+                        mode: Mode {
+                            size: rect.size,
+                            frequency: 60.,
+                        },
+                    },
+                    rect.clone(),
+                )
+            })
+            .collect(),
+    )
+    .unwrap();
+    dbg!(&layout);
+    let normalized_rects =
+        layout.compute_base_coords(&Vec::from_iter(rects.iter().map(|rect| Mode {
+            size: rect.size,
+            frequency: 60.,
+        })));
+    draw_layout(
+        std::path::Path::new("static_normalized.png"),
+        &normalized_rects,
+    );
 }

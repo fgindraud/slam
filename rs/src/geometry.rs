@@ -151,6 +151,13 @@ impl<T> Vec2d<T> {
     pub fn new(x: T, y: T) -> Self {
         Vec2d { x, y }
     }
+
+    pub fn apply(self, transform: &Transform) -> Vec2d<T> {
+        match transform.are_axis_swapped() {
+            false => self,
+            true => Vec2d::new(self.y, self.x),
+        }
+    }
 }
 
 impl<T> From<(T, T)> for Vec2d<T> {
@@ -197,6 +204,7 @@ impl<T: Ord> Vec2d<T> {
 /// `x` axis is from left to right. `y` axis is from bottom to top.
 /// The rectangle covers pixels in `[bl.x, bl.x+size.x[ X [bl.y, bl.y+size.y[`.
 /// Top and right sides are excluded.
+#[derive(Debug, Clone)]
 pub struct Rect {
     pub bottom_left: Vec2di,
     pub size: Vec2di,

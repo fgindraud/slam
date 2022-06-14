@@ -1,12 +1,15 @@
 use super::RelationMatrix;
-use crate::geometry::{Direction, InvertibleRelation, Vec2d, Vec2di};
+use crate::geometry::{Direction, InvertibleRelation, Rect, Vec2d, Vec2di};
 use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, Mul};
 use std::time::Duration;
 
+#[derive(Debug)]
 pub struct Infeasible;
 
-pub fn compute_base_coordinates(
+/// Compute output `bottom_left` coords as an optimization problem with constraints coming from a [`RelationMatrix`].
+/// May fail if constraints cannot be met.
+pub fn compute_optimized_bottom_left_coords(
     sizes: &[Vec2di],
     relations: &RelationMatrix<Direction>,
 ) -> Result<Vec<Vec2di>, Infeasible> {
@@ -49,11 +52,38 @@ pub fn compute_base_coordinates(
     }
     // TODO maybe post simplify singleton constraints
     let settings = osqp::Settings::default()
-        .verbose(true) // Temporary
+        .verbose(false)
         .time_limit(Some(Duration::from_secs(1)));
-    let problem = create_qp_problem(&problem, sizes, &settings).unwrap();
-
-    Ok(Vec::new())
+    let mut qp_problem = create_qp_problem(&problem, sizes, &settings).map_err(|_| Infeasible)?;
+    let solution = match qp_problem.solve() {
+        osqp::Status::Solved(solution) => solution,
+        unsolved => {
+            use osqp::Status::*;
+            match unsolved {
+                SolvedInaccurate(_) => log::info!("osqp: problem solved but inaccurate"),
+                TimeLimitReached(_) => log::info!("osqp: time limit reached"),
+                MaxIterationsReached(_) => log::info!("osqp: max iterations reached"),
+                PrimalInfeasible(_) => log::debug!("osqp: primal infeasible"),
+                PrimalInfeasibleInaccurate(_) => log::debug!("osqp: primal infeasible inaccurate"),
+                DualInfeasible(_) => log::debug!("osqp: dual infeasible"),
+                DualInfeasibleInaccurate(_) => log::debug!("osqp: dual infeasible inaccurate"),
+                NonConvex(_) => log::debug!("osqp: non convex"),
+                _ => {}
+            }
+            return Err(Infeasible);
+        }
+    };
+    // Extract results. For now just round floats into integers.
+    problem
+        .coordinate_definitions
+        .iter()
+        .map(|def| -> Result<Vec2di, Infeasible> {
+            Ok(Vec2di {
+                x: def.x.evaluate(solution.x())?,
+                y: def.y.evaluate(solution.x())?,
+            })
+        })
+        .collect()
 }
 
 // Helpers that are used twice each (LeftOf+RightOf, Above+Under)
@@ -102,7 +132,9 @@ fn create_qp_problem(
     sizes: &[Vec2di],
     settings: &osqp::Settings,
 ) -> Result<osqp::Problem, osqp::SetupError> {
-    let n = problem.nb_variables();
+    let n_var = problem.nb_variables();
+    let n_coord = problem.coordinate_definitions.len();
+    assert_eq!(n_coord, sizes.len());
     // criteria = sum(distance_of_output_center_to_barycenter^2), with barycenter of centers using output area as weights.
     // base coordinates = (x_i, y_i). sizes = (sx_i, syi). weights a_i = sx_i * sy_i.
     // using centers c_i = (x_i + sx_i / 2, y_i + sy_i / 2), barycenter : (sum_i a_i) b = sum_i a_i c_i.
@@ -111,47 +143,32 @@ fn create_qp_problem(
     // Looking only at x (mirror of y) : sum_j a_j (x_i + sx_i/2 - x_j - sx_j/2 = X^T * [C:1d array] + c: constant.
     // Thus (sum_j a_j (x_i + sx_i/2 - x_j - sx_j/2))^2 = (X^T C + c)^2 = X^T (C C^T) X + 2 c C^T X + c^2.
     // For minimized objective in osqp, p += C C^T, q += c C, and c^2 is ignored.
-    let mut p = RowMatrix::square(n, 0.);
-    let mut q = vec![0.; n];
-    fn accumulate_C_c(
-        c_array: &mut [f64],
-        c: &mut f64,
-        a_j: f64,
-        pos: Expression,
-        neg: Expression,
-    ) {
-        if let Some(variable) = pos.variable {
-            c_array[variable.index] += a_j;
-        }
-        if let Some(variable) = neg.variable {
-            c_array[variable.index] -= a_j;
-        }
-        *c += a_j * f64::from(pos.constant - neg.constant);
-    }
-    for i in 0..n {
+    let mut p = RowMatrix::square(n_var, 0.);
+    let mut q = vec![0.; n_var];
+    for i in 0..n_coord {
         let size_i = &sizes[i];
         let coord_i = &problem.coordinate_definitions[i];
-        let mut c_array_x = vec![0.; n];
+        let mut c_array_x = vec![0.; n_var];
         let mut c_x = 0.;
-        let mut c_array_y = vec![0.; n];
+        let mut c_array_y = vec![0.; n_var];
         let mut c_y = 0.;
-        for j in 0..n {
+        for j in 0..n_coord {
             let size_j = &sizes[j];
             let coord_j = &problem.coordinate_definitions[j];
-            let a_j = f64::from(size_j.x * size_j.y);
-            accumulate_C_c(
+            let a_j = f64::from(size_j.x) * f64::from(size_j.y);
+            accumulate_carray_c(
                 &mut c_array_x,
                 &mut c_x,
                 a_j,
-                coord_i.x.clone() + size_i.x / 2,
-                coord_j.x.clone() + size_j.x / 2,
+                coord_i.x.clone() + (size_i.x / 2),
+                coord_j.x.clone() + (size_j.x / 2),
             );
-            accumulate_C_c(
+            accumulate_carray_c(
                 &mut c_array_y,
                 &mut c_y,
                 a_j,
-                coord_i.y.clone() + size_i.y / 2,
-                coord_j.y.clone() + size_j.y / 2,
+                coord_i.y.clone() + (size_i.y / 2),
+                coord_j.y.clone() + (size_j.y / 2),
             )
         }
         p.add_vt_v(&c_array_x);
@@ -160,19 +177,19 @@ fn create_qp_problem(
         add_a_times_array(&mut q, c_y, &c_array_y);
     }
     // Constraints : l <= Ax <= u
-    let mut a = RowMatrix::empty(n);
+    let mut a = RowMatrix::empty(n_var);
     let (mut l, mut u) = (Vec::new(), Vec::new());
     for (variable, constraint) in problem.mono_constraints.iter().enumerate() {
         if !constraint.is_unconstrained() {
-            a.add_row((0..n).map(|i| if i == variable { 1. } else { 0. }));
+            a.add_row((0..n_var).map(|i| if i == variable { 1. } else { 0. }));
             l.push(f64::from(constraint.min));
             u.push(f64::from(constraint.max))
         }
     }
-    for pos in 0..n {
+    for pos in 0..n_var {
         for neg in 0..pos {
             if let Some(constraint) = problem.dual_constraints.get(neg, pos) {
-                a.add_row((0..n).map(|i| match i {
+                a.add_row((0..n_var).map(|i| match i {
                     i if i == pos => 1.,
                     i if i == neg => -1.,
                     _ => 0.,
@@ -183,6 +200,22 @@ fn create_qp_problem(
         }
     }
     osqp::Problem::new(&p, &q, &a, &l, &u, settings)
+}
+
+fn accumulate_carray_c(
+    c_array: &mut [f64],
+    c: &mut f64,
+    a_j: f64,
+    pos: Expression,
+    neg: Expression,
+) {
+    if let Some(variable) = pos.variable {
+        c_array[variable.index] += a_j;
+    }
+    if let Some(variable) = neg.variable {
+        c_array[variable.index] -= a_j;
+    }
+    *c += a_j * f64::from(pos.constant - neg.constant);
 }
 
 fn add_a_times_array(acc: &mut [f64], a: f64, array: &[f64]) {
@@ -499,6 +532,19 @@ impl Expression {
             constant: 0,
             variable: Some(problem.new_variable()),
         }
+    }
+    fn evaluate(&self, variables: &[f64]) -> Result<i32, Infeasible> {
+        let variable = match self.variable {
+            None => 0,
+            Some(v) => {
+                let float = variables[v.index].round();
+                if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&float) {
+                    return Err(Infeasible);
+                }
+                float as i32
+            }
+        };
+        Ok(self.constant + variable)
     }
 }
 

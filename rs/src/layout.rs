@@ -6,11 +6,11 @@ use std::cmp::Ordering;
 /// Bytes 8 to 15 of EDID header, containing manufacturer id + serial number.
 /// This should be sufficient for unique identification of a display.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Edid([u8; 8]);
+pub struct Edid(u64);
 
 impl std::fmt::Debug for Edid {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Edid({:#016x})", u64::from_be_bytes(self.0))
+        write!(f, "Edid({:#016x})", self.0)
     }
 }
 
@@ -26,9 +26,15 @@ impl<'a> TryFrom<&'a [u8]> for Edid {
         if bytes[0..8] != [0x0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x0] {
             return Err("Edid: missing constant header pattern");
         }
-        let mut id_bytes: [u8; 8] = Default::default();
-        id_bytes.copy_from_slice(&bytes[8..16]);
-        Ok(Edid(id_bytes))
+        let id_bytes: [u8; 8] = bytes[8..16].try_into().unwrap();
+        Ok(Edid(u64::from_be_bytes(id_bytes)))
+    }
+}
+
+// For tests only
+impl From<u64> for Edid {
+    fn from(raw: u64) -> Edid {
+        Edid(raw)
     }
 }
 
@@ -106,6 +112,16 @@ impl EnabledOutput {
             EnabledOutput::Name { name, .. } => OutputIdRef::Name(name.as_ref()),
         }
     }
+
+    /// Use preferred mode size when Edid is not available
+    fn transformed_size(&self, preferred_mode: &Mode) -> Vec2di {
+        match self {
+            EnabledOutput::Edid {
+                mode, transform, ..
+            } => mode.size.clone().apply(transform),
+            EnabledOutput::Name { transform, .. } => preferred_mode.size.clone().apply(transform),
+        }
+    }
 }
 
 impl Layout {
@@ -126,8 +142,11 @@ impl Layout {
     ) -> Result<Layout, LayoutInferenceError> {
         // Detect mode / coordinate mismatch
         for (output, rect) in enabled_output_and_rects.iter() {
-            if let EnabledOutput::Edid { mode, .. } = output {
-                if mode.size != rect.size {
+            if let EnabledOutput::Edid {
+                mode, transform, ..
+            } = output
+            {
+                if mode.size.clone().apply(transform) != rect.size {
                     return Err(LayoutInferenceError::ModeDoesNotMatchSize);
                 }
             }
@@ -183,24 +202,22 @@ impl std::fmt::Display for LayoutInferenceError {
 impl std::error::Error for LayoutInferenceError {}
 
 impl Layout {
-    pub fn compute_rects(&self, enabled_output_preferred_modes: &[Mode]) -> Vec<Rect> {
+    pub fn compute_base_coords(&self, enabled_output_preferred_modes: &[Mode]) -> Vec<Vec2di> {
         assert_eq!(
             enabled_output_preferred_modes.len(),
             self.enabled_outputs.len()
         );
-        // Use preferred mode size when Edid is not available
         let output_sizes = Vec::from_iter(
             Iterator::zip(
                 self.enabled_outputs.iter(),
                 enabled_output_preferred_modes.iter(),
             )
-            .map(|(output, preferred_mode)| match output {
-                EnabledOutput::Edid { mode, .. } => mode.size.clone(),
-                EnabledOutput::Name { .. } => preferred_mode.size.clone(),
-            }),
+            .map(|(output, preferred_mode)| output.transformed_size(preferred_mode)),
         );
-        // TODO
-        Vec::new()
+        // TODO handle failure
+        // overlap -> add relations
+        // failure -> remove relations ?
+        compute_rects::compute_optimized_bottom_left_coords(&output_sizes, &self.relations).unwrap()
     }
 }
 
