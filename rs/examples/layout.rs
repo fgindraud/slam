@@ -72,36 +72,4 @@ fn main() {
         },
     ];
     draw_layout(std::path::Path::new("static.png"), &rects);
-
-    let layout = Layout::from_output_and_rects(
-        Box::new([]),
-        rects
-            .iter()
-            .enumerate()
-            .map(|(fake_id, rect)| {
-                (
-                    EnabledOutput::Edid {
-                        edid: Edid::from(u64::try_from(fake_id).unwrap()),
-                        transform: Transform::default(),
-                        mode: Mode {
-                            size: rect.size,
-                            frequency: 60.,
-                        },
-                    },
-                    rect.clone(),
-                )
-            })
-            .collect(),
-    )
-    .unwrap();
-    dbg!(&layout);
-    let normalized_rects =
-        layout.compute_base_coords(&Vec::from_iter(rects.iter().map(|rect| Mode {
-            size: rect.size,
-            frequency: 60.,
-        })));
-    draw_layout(
-        std::path::Path::new("static_normalized.png"),
-        &normalized_rects,
-    );
 }

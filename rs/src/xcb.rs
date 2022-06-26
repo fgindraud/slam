@@ -1,5 +1,5 @@
 use crate::geometry::{Rect, Rotation, Transform, Vec2di};
-use crate::layout::{Edid, EnabledOutput, Layout, LayoutInferenceError, Mode, OutputId};
+use crate::layout::{Edid, EnabledOutput, Layout, Mode, OutputId};
 use crate::Backend;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -59,7 +59,7 @@ impl XcbBackend {
         };
 
         let output_set_state = OutputSetState::query(&connection, root_window, edid_atom)?;
-        let layout = convert_to_layout(&output_set_state).unwrap();
+        let layout = convert_to_layout(&output_set_state);
         dbg!(layout);
 
         Ok(XcbBackend {
@@ -240,54 +240,42 @@ impl OutputState {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-fn convert_to_layout(output_states: &OutputSetState) -> Result<Layout, LayoutInferenceError> {
+fn convert_to_layout(output_states: &OutputSetState) -> Layout {
     // Get output information after checking that it is properly enabled (crtc + mode).
-    let get_transform_mode_rect_if_enabled = |xcb_state: &OutputState| -> Option<_> {
+    let get_transform_mode_coord_if_enabled = |xcb_state: &OutputState| -> Option<_> {
         let assigned_crtc = output_states.crtcs.get(&xcb_state.info.crtc())?;
         let valid_mode = output_states.mode_from_id(assigned_crtc.mode())?;
         let transform = Transform::from(assigned_crtc.rotation());
-        let rect = Rect {
-            bottom_left: Vec2di::new(assigned_crtc.x().into(), assigned_crtc.y().into()),
-            size: valid_mode.size,
-        };
-        Some((transform, valid_mode, rect))
+        let bottom_left = Vec2di::new(assigned_crtc.x().into(), assigned_crtc.y().into());
+        Some((transform, valid_mode, bottom_left))
     };
     let mut disabled_outputs = Vec::new();
-    let mut enabled_output_and_rects = Vec::new();
+    let mut enabled_outputs = Vec::new();
     for state in output_states
         .outputs
         .iter()
         .map(|(_, state)| state)
         .filter(|state| state.is_connected())
     {
-        match get_transform_mode_rect_if_enabled(state) {
-            Some((transform, mode, rect)) => {
-                let output = match state.edid {
-                    Some(edid) => EnabledOutput::Edid {
-                        edid,
-                        transform,
-                        mode,
-                    },
-                    None => EnabledOutput::Name {
-                        name: state.name.clone(),
-                        transform,
-                    },
-                };
-                enabled_output_and_rects.push((output, rect))
-            }
-            None => {
-                let id = match state.edid {
-                    Some(edid) => OutputId::Edid(edid),
-                    None => OutputId::Name(state.name.clone()),
-                };
-                disabled_outputs.push(id)
-            }
+        let id = match state.edid {
+            Some(edid) => OutputId::Edid(edid),
+            None => OutputId::Name(state.name.clone()),
+        };
+        match get_transform_mode_coord_if_enabled(state) {
+            Some((transform, mode, bottom_left)) => enabled_outputs.push(EnabledOutput {
+                id,
+                mode,
+                transform,
+                bottom_left,
+            }),
+            None => disabled_outputs.push(id),
         }
     }
-    Layout::from_output_and_rects(
-        Vec::into_boxed_slice(disabled_outputs),
-        enabled_output_and_rects,
-    )
+    Layout {
+        disabled_outputs: Vec::into_boxed_slice(disabled_outputs),
+        enabled_outputs: Vec::into_boxed_slice(enabled_outputs),
+        primary: None,
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

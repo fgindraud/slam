@@ -46,80 +46,48 @@ pub struct Mode {
     pub frequency: f64, // FIXME
 }
 
-/// Identifier for an output : [`Edid`] if available, or the output name.
+/// Identifier for an output : , or the output name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OutputId {
+    /// [`Edid`] is prefered if available
     Edid(Edid),
+    /// Fallback to output name and monitor preferred size
     Name(String),
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub enum OutputIdRef<'a> {
-    Edid(Edid),
-    Name(&'a str),
-}
-
 /// State and identification for an enabled output.
-/// Two modes depending on whether an [`Edid`] is available :
-/// - with [`Edid`] as an index : orientation and specific [`Mode`].
-/// - fallback using output name, and do not store mode as we cannot differentiate monitors.
 #[derive(Debug)]
-pub enum EnabledOutput {
-    Edid {
-        edid: Edid,
-        transform: Transform,
-        mode: Mode,
-    },
-    Name {
-        name: String,
-        transform: Transform,
-    },
+pub struct EnabledOutput {
+    pub id: OutputId,
+    pub mode: Mode,
+    pub transform: Transform,
+    pub bottom_left: Vec2di,
 }
 
 /// State of a set of screen outputs and their relative positionning.
 /// Intended to be stored in the database.
 /// Lists all connected outputs of a system.
-/// At least one output must be enabled.
 #[derive(Debug)]
 pub struct Layout {
     /// Disabled outputs : only list their ids.
-    disabled_outputs: Box<[OutputId]>,
+    pub disabled_outputs: Box<[OutputId]>,
     /// Enabled output states.
-    enabled_outputs: Box<[EnabledOutput]>,
-    /// Relative positionning of the enabled outputs. Indexed by position of outputs in `enabled_outputs`.
-    relations: RelationMatrix<Direction>,
+    pub enabled_outputs: Box<[EnabledOutput]>,
     /// Primary output if used / supported. Not in Wayland apparently.
     /// Used by some window manager to choose where to place tray icons, etc.
     /// Index is a reference in `enabled_outputs`.
-    primary: Option<u16>,
+    pub primary: Option<u16>,
 }
 
 // TODO it would be useful to store data for statistical mode, with output names
 // TODO serialization
 
 impl EnabledOutput {
-    /// Get matching [`OutputId`].
-    pub fn id(&self) -> OutputId {
-        match self {
-            EnabledOutput::Edid { edid, .. } => OutputId::Edid(edid.clone()),
-            EnabledOutput::Name { name, .. } => OutputId::Name(name.clone()),
-        }
-    }
-
-    fn id_ref<'a>(&'a self) -> OutputIdRef<'a> {
-        match self {
-            EnabledOutput::Edid { edid, .. } => OutputIdRef::Edid(edid.clone()),
-            EnabledOutput::Name { name, .. } => OutputIdRef::Name(name.as_ref()),
-        }
-    }
-
-    /// Use preferred mode size when Edid is not available
-    fn transformed_size(&self, preferred_mode: &Mode) -> Vec2di {
-        match self {
-            EnabledOutput::Edid {
-                mode, transform, ..
-            } => mode.size.clone().apply(transform),
-            EnabledOutput::Name { transform, .. } => preferred_mode.size.clone().apply(transform),
+    /// Rect occupied by monitor in abstract 2D space (X11 screen)
+    fn rect(&self) -> Rect {
+        Rect {
+            bottom_left: self.bottom_left.clone(),
+            size: self.mode.size.clone().apply(&self.transform),
         }
     }
 }
@@ -129,325 +97,9 @@ impl Layout {
     pub fn connected_outputs(&self) -> Box<[OutputId]> {
         let mut v = Vec::from_iter(Iterator::chain(
             self.disabled_outputs.iter().cloned(),
-            self.enabled_outputs.iter().map(EnabledOutput::id),
+            self.enabled_outputs.iter().map(|o| o.id.clone()),
         ));
         v.sort_unstable();
         Vec::into_boxed_slice(v)
     }
-
-    /// Infer a layout from output coordinates.
-    pub fn from_output_and_rects(
-        disabled_outputs: Box<[OutputId]>,
-        enabled_output_and_rects: Vec<(EnabledOutput, Rect)>,
-    ) -> Result<Layout, LayoutInferenceError> {
-        // Detect mode / coordinate mismatch
-        for (output, rect) in enabled_output_and_rects.iter() {
-            if let EnabledOutput::Edid {
-                mode, transform, ..
-            } = output
-            {
-                if mode.size.clone().apply(transform) != rect.size {
-                    return Err(LayoutInferenceError::ModeDoesNotMatchSize);
-                }
-            }
-        }
-        // Sort outputs and rects together then split them
-        let mut enabled_output_and_rects = enabled_output_and_rects;
-        enabled_output_and_rects
-            .sort_unstable_by(|(l, _), (r, _)| std::cmp::Ord::cmp(&l.id_ref(), &r.id_ref()));
-        let (enabled_outputs, rects): (Vec<_>, Vec<_>) =
-            enabled_output_and_rects.into_iter().unzip();
-        // Infer relations and check layout
-        let size = rects.len();
-        let mut relations = RelationMatrix::new(size);
-        for rhs in 1..size {
-            let rhs_rect = &rects[rhs];
-            for lhs in 0..rhs {
-                let lhs_rect = &rects[lhs];
-                if lhs_rect.overlaps(rhs_rect) {
-                    return Err(LayoutInferenceError::Overlap);
-                }
-                relations.set(lhs, rhs, Rect::adjacent_direction(lhs_rect, rhs_rect))
-            }
-        }
-        if !relations.is_single_connected_component() {
-            return Err(LayoutInferenceError::Gaps);
-        }
-        Ok(Layout {
-            disabled_outputs,
-            enabled_outputs: Vec::into_boxed_slice(enabled_outputs),
-            relations,
-            primary: None, // FIXME
-        })
-    }
-}
-
-#[derive(Debug)]
-pub enum LayoutInferenceError {
-    Overlap,
-    Gaps,
-    ModeDoesNotMatchSize,
-}
-impl std::fmt::Display for LayoutInferenceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use LayoutInferenceError::*;
-        let s = match self {
-            Overlap => "some outputs overlap",
-            Gaps => "output set does not form a connex block",
-            ModeDoesNotMatchSize => "output mode size does not match rect size",
-        };
-        s.fmt(f)
-    }
-}
-impl std::error::Error for LayoutInferenceError {}
-
-impl Layout {
-    pub fn compute_base_coords(&self, enabled_output_preferred_modes: &[Mode]) -> Vec<Vec2di> {
-        assert_eq!(
-            enabled_output_preferred_modes.len(),
-            self.enabled_outputs.len()
-        );
-        let output_sizes = Vec::from_iter(
-            Iterator::zip(
-                self.enabled_outputs.iter(),
-                enabled_output_preferred_modes.iter(),
-            )
-            .map(|(output, preferred_mode)| output.transformed_size(preferred_mode)),
-        );
-        // TODO handle failure
-        // overlap -> add relations
-        // failure -> remove relations ?
-        compute_rects::compute_optimized_bottom_left_coords(&output_sizes, &self.relations).unwrap()
-    }
-}
-
-/// Compute rects optimization problem code (lengthy).
-mod compute_rects;
-
-///////////////////////////////////////////////////////////////////////////////
-
-/// Stores binary relations efficiently, like [`Direction`].
-/// Semantically a `Map<(usize,usize), Option<T>>`.
-/// Relations are only stored for `lhs < rhs` and is reversed if necessary, all to avoid redundant data.
-/// Relation with self are ignored, so it is not stored and always evaluate to [`None`].
-/// Invalid indexes will usually trigger a [`panic!`].
-/// Iteration on all pairs of indexes should iterate first on the high index and then low for performance.
-#[derive(Debug, Clone)]
-pub struct RelationMatrix<T> {
-    size: usize,
-    /// `size * (size - 1) / 2` relations
-    array: Vec<Option<T>>,
-}
-
-impl<T: InvertibleRelation + Clone> RelationMatrix<T> {
-    /// Buffer size for triangular matrix : `n * (n-1) / 2`.
-    /// Except for `n = 0`, where buffer size is chosen to be 0.
-    fn buffer_size(nb_elements: usize) -> usize {
-        // Clamp to 0 with saturating sub to prevent underflow.
-        (nb_elements * nb_elements.saturating_sub(1)) / 2
-    }
-
-    /// Create an empty relation matrix with `size` elements.
-    pub fn new(size: usize) -> RelationMatrix<T> {
-        RelationMatrix {
-            size,
-            array: vec![None; Self::buffer_size(size)],
-        }
-    }
-
-    pub fn size(&self) -> usize {
-        self.size
-    }
-
-    /// Compute linearized index for `0 <= low < high < size`.
-    /// Linearized layout : `[(0,1),(0-1,2),(0-2,3),(0-3,4),...]`.
-    fn linearized_index(&self, low: usize, high: usize) -> usize {
-        assert!(low < high, "expected {} < {}", low, high);
-        assert!(high < self.size);
-        let high_offset = (high * (high - 1)) / 2; // 0, 1, 3, 6, ...
-        high_offset + low
-    }
-
-    /// Get relation value for `(lhs, rhs)`.
-    pub fn get(&self, lhs: usize, rhs: usize) -> Option<T> {
-        match Ord::cmp(&lhs, &rhs) {
-            Ordering::Less => self.array[self.linearized_index(lhs, rhs)].clone(),
-            Ordering::Greater => self.array[self.linearized_index(rhs, lhs)]
-                .as_ref()
-                .map(|r| r.inverse()),
-            Ordering::Equal => None,
-        }
-    }
-
-    /// Set relation value for `(lhs, rhs)`.
-    pub fn set(&mut self, lhs: usize, rhs: usize, relation: Option<T>) {
-        match Ord::cmp(&lhs, &rhs) {
-            Ordering::Less => {
-                let index = self.linearized_index(lhs, rhs);
-                self.array[index] = relation
-            }
-            Ordering::Greater => {
-                let index = self.linearized_index(rhs, lhs);
-                self.array[index] = relation.map(|r| r.inverse())
-            }
-            Ordering::Equal => (),
-        }
-    }
-
-    /// Add a new element with no relations to other, at the end of indexes.
-    /// Returns the new index (equal to `size - 1`).
-    pub fn add_element(&mut self) -> usize {
-        let size = self.size;
-        self.array.resize(Self::buffer_size(size + 1), None);
-        self.size = size + 1;
-        size
-    }
-
-    /// Remove an element and all its relations.
-    /// All elements with higher indexes will be shifted by `-1`.
-    /// This matches use in [`compute_rects`].
-    pub fn remove_element(&mut self, index: usize) {
-        assert!(index < self.size);
-        // Shift values backward in holes left by removal in `self.array`.
-        let mut dest_buffer_index = (index * (index.saturating_sub(1))) / 2;
-        for high in (index + 1)..self.size {
-            for low in 0..high {
-                if low != index {
-                    let src_buffer_index = self.linearized_index(low, high);
-                    self.array[dest_buffer_index] = self.array[src_buffer_index].take();
-                    dest_buffer_index += 1;
-                }
-            }
-        }
-        self.size -= 1;
-        self.array.truncate(dest_buffer_index)
-    }
-
-    /// Check if all outputs are connected by relations.
-    pub fn is_single_connected_component(&self) -> bool {
-        // Union find structure with indexes : map[0..size] -> 0..size
-        fn get_representative(map: &[usize], i: usize) -> usize {
-            let mut result = i;
-            loop {
-                let repr = map[result];
-                if repr == result {
-                    return result;
-                }
-                result = repr
-            }
-        }
-        let mut representatives = Vec::from_iter(0..self.size);
-        // Start with all outputs as singular components. Merge them every time there is a relation.
-        for rhs in 1..self.size {
-            for lhs in 0..rhs {
-                if self.get(lhs, rhs).is_some() {
-                    // Merge connected components towards min index.
-                    let lhs = get_representative(&representatives, lhs);
-                    let rhs = get_representative(&representatives, rhs);
-                    representatives[std::cmp::max(lhs, rhs)] = std::cmp::min(lhs, rhs)
-                }
-            }
-        }
-        // If all outputs form a single block, the representant of everyone should be 0 (smallest).
-        (0..self.size).all(|output| get_representative(&representatives, output) == 0)
-    }
-
-    // TODO serialization : just store linearized buffer, infer size with sqrt()
-}
-
-#[cfg(test)]
-#[test]
-fn test_relation_matrix_basic() {
-    // Check buffer size
-    assert_eq!(RelationMatrix::<Direction>::buffer_size(0), 0);
-    assert_eq!(RelationMatrix::<Direction>::buffer_size(1), 0);
-    assert_eq!(RelationMatrix::<Direction>::buffer_size(2), 1);
-    assert_eq!(RelationMatrix::<Direction>::buffer_size(3), 3);
-    // Basic ops
-    let size = 10;
-    let mut matrix = RelationMatrix::new(size);
-    // Check linearization
-    {
-        let mut manual_offset = 0;
-        for n in 1..size {
-            for m in 0..n {
-                assert_eq!(matrix.linearized_index(m, n), manual_offset);
-                manual_offset += 1;
-            }
-        }
-        assert_eq!(manual_offset, matrix.array.len())
-    }
-    // Sanity check for store/load logic
-    matrix.set(2, 3, Some(Direction::LeftOf));
-    assert_eq!(matrix.get(2, 3), Some(Direction::LeftOf));
-    assert_eq!(matrix.get(3, 2), Some(Direction::RightOf));
-    matrix.set(3, 2, Some(Direction::Above));
-    assert_eq!(matrix.get(2, 3), Some(Direction::Under));
-    // Add some more content
-    for (i, j) in [(0, 4), (4, 2), (2, 1), (1, 3)] {
-        matrix.set(i, j, Some(Direction::LeftOf))
-    }
-    // Remove and check that the matrix are the same if we skip the removed id.
-    let original = matrix.clone();
-    let removed_id = 3;
-    matrix.remove_element(removed_id);
-    assert_eq!(
-        matrix.array.len(),
-        RelationMatrix::<Direction>::buffer_size(matrix.size)
-    );
-    for lhs in 0..matrix.size {
-        for rhs in 0..matrix.size {
-            assert_eq!(
-                matrix.get(lhs, rhs),
-                original.get(
-                    lhs + if lhs >= removed_id { 1 } else { 0 },
-                    rhs + if rhs >= removed_id { 1 } else { 0 }
-                )
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-#[test]
-fn test_relation_matrix_connexity() {
-    fn check(n: usize, is_connex: bool, relations: &[(usize, usize)]) {
-        let mut matrix = RelationMatrix::new(n);
-        for (i, j) in relations {
-            // direction itself does not matter
-            matrix.set(*i, *j, Some(Direction::LeftOf))
-        }
-        assert!(
-            matrix.is_single_connected_component() == is_connex,
-            "case: n={} rels={:?}",
-            n,
-            relations
-        )
-    }
-    check(0, true, &[]);
-
-    check(1, true, &[]);
-
-    check(2, false, &[]);
-    check(2, true, &[(0, 1)]);
-
-    check(3, false, &[]);
-    check(3, false, &[(0, 1)]);
-    check(3, false, &[(0, 2)]);
-    check(3, false, &[(1, 2)]);
-    check(3, true, &[(1, 2), (0, 1)]);
-    check(3, true, &[(0, 2), (0, 1)]);
-    check(3, true, &[(0, 1), (1, 2), (0, 2)]);
-
-    check(4, false, &[(0, 1), (1, 2), (0, 2)]);
-    check(4, false, &[(0, 1), (2, 3)]);
-    check(4, false, &[(0, 2), (1, 3)]);
-    check(4, false, &[(0, 3), (1, 2)]);
-    check(4, true, &[(0, 3), (1, 2), (0, 2)]);
-    check(4, true, &[(0, 1), (1, 2), (2, 3)]);
-    check(4, true, &[(0, 2), (3, 2), (1, 3)]);
-
-    check(5, false, &[(0, 1), (1, 2), (2, 1), (3, 4)]);
-    check(5, true, &[(0, 1), (1, 2), (2, 3), (3, 4)]);
-    check(5, true, &[(0, 4), (4, 2), (2, 1), (1, 3)]);
 }

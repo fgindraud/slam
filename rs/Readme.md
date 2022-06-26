@@ -34,21 +34,26 @@ When the backend layout changes :
 * If the set of physical outputs is different from before (add / remove screen) :
     * If a database entry exists for this set of outputs, use the stored layout.
     * If no database entry, this is a new situation: create a layout enabling the new screen(s) with a default position.
-* If same set of outputs, this is a change to software layout: analyze it, normalize to our layout model and store it.
+* If same set of outputs, this is a change to software layout: store it.
 
 Thus with this set of semantics the stored layouts can be set by using any other tool to change the current layout : `xrandr`, `arandr`, GUIs.
 The change from this external tool will be recognized as a _software_ change and be stored, eliminating the need to configure it from _SLAM_ itself.
 
 What is stored :
-* Directional relations between outputs (`left-of`, etc).
+* Mode of each output (size+frequency). Defaults to _preferred mode_ when autolayouting.
+* Coordinates of each output in an abstract space : Screen in X11, windows seems to have the same model
 * Rotation and reflection for each output.
-* Mode of each output (size+frequency), which must be from the list attached to the output. Defaults to _preferred mode_.
 * Primary output for X.
 
 The EDID data may be absent due to video signal forwarding equiment like cheap KVMs often present in conference rooms.
-In this case the layout will be stored by using the _output name_ (like `DP-0`) instead of EDID.
-The mode will not be stored (as it may not apply to other outputs plugged to this port) and the preferred mode used instead.
-TODO target, check after impl if we actually used that.
+In this case, instead of EDID, the layout will be stored by using the _output name_ (like `DP-0`) and preferred mode size.
+This should be enough to disambiguate between two different monitors for what is useful to us : size for layouting.
+Note that this require non EDID mode monitors to use the preferred mode !
+
+Autolayouting:
+TODO
+Provide a manual tool to normalize a layout.
+Used for creating new layouts ?
 
 TODO:
 * strategy for default layout:
