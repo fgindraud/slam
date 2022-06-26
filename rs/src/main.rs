@@ -1,5 +1,5 @@
 use clap::Parser;
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 #[derive(Debug, Parser)]
 #[clap(version, about)]
@@ -11,6 +11,10 @@ struct DaemonOptions {
     /// Sets log level: error warn info debug trace
     #[clap(long, value_name = "LEVEL")]
     log_level: Option<log::Level>,
+
+    /// Wait for other daemons to react
+    #[clap(long, value_name = "SECONDS")]
+    reaction_delay: Option<u64>,
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -29,19 +33,23 @@ fn main() -> Result<(), anyhow::Error> {
             p
         }
     };
-
     dbg!(database_path);
+
+    let reaction_delay = options.reaction_delay.map(Duration::from_secs);
 
     #[cfg(feature = "xcb")]
     match slam::xcb::XcbBackend::start() {
-        Ok(mut backend) => return run_daemon(&mut backend),
+        Ok(mut backend) => return run_daemon(&mut backend, reaction_delay),
         Err(err) => eprintln!("Cannot start Xcb backend: {}", err),
     }
     Err(anyhow::Error::msg("No working available backend"))
 }
 
-fn run_daemon(backend: &mut dyn slam::Backend) -> Result<(), anyhow::Error> {
+fn run_daemon(
+    backend: &mut dyn slam::Backend,
+    reaction_delay: Option<Duration>,
+) -> Result<(), anyhow::Error> {
     loop {
-        backend.wait_for_change()?
+        backend.wait_for_change(reaction_delay)?
     }
 }

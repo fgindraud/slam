@@ -1,7 +1,8 @@
 use crate::geometry::{Rect, Rotation, Transform, Vec2di};
-use crate::layout::{Edid, EnabledOutput, Layout, Mode, OutputId};
+use crate::layout::{Edid, EnabledOutput, Layout, LayoutInferenceError, Mode, OutputId};
 use crate::Backend;
 use std::collections::HashMap;
+use std::time::Duration;
 use xcb::Xid;
 
 /// Backend for X server, using xcb bindings with randr extension.
@@ -70,10 +71,11 @@ impl XcbBackend {
 }
 
 impl Backend for XcbBackend {
-    fn wait_for_change(&mut self) -> Result<(), anyhow::Error> {
+    fn wait_for_change(&mut self, reaction_delay: Option<Duration>) -> Result<(), anyhow::Error> {
         // Wait for any randr event, then reload entire randr state.
         // Easier than patching state with notify event data.
         loop {
+            // Wait for event, flush all events, and determine if it was randr related
             let mut had_randr_event = false;
             let event = self.connection.wait_for_event()?;
             had_randr_event |= check_randr_event(event);
@@ -81,10 +83,19 @@ impl Backend for XcbBackend {
                 had_randr_event |= check_randr_event(event)
             }
             if had_randr_event {
-                break;
+                if let Some(delay) = reaction_delay {
+                    // If delay is requested, also flush all randr events during the delay
+                    std::thread::sleep(delay);
+                    if let Some(event) = self.connection.poll_for_event()? {
+                        check_randr_event(event);
+                    }
+                    while let Some(event) = self.connection.poll_for_queued_event()? {
+                        check_randr_event(event);
+                    }
+                }
+                return Ok(());
             }
         }
-        Ok(())
     }
 }
 
@@ -229,7 +240,7 @@ impl OutputState {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-fn convert_to_layout(output_states: &OutputSetState) -> Option<Layout> {
+fn convert_to_layout(output_states: &OutputSetState) -> Result<Layout, LayoutInferenceError> {
     // Get output information after checking that it is properly enabled (crtc + mode).
     let get_transform_mode_rect_if_enabled = |xcb_state: &OutputState| -> Option<_> {
         let assigned_crtc = output_states.crtcs.get(&xcb_state.info.crtc())?;
@@ -277,7 +288,6 @@ fn convert_to_layout(output_states: &OutputSetState) -> Option<Layout> {
         Vec::into_boxed_slice(disabled_outputs),
         enabled_output_and_rects,
     )
-    .ok()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
