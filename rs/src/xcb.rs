@@ -19,6 +19,7 @@ use xcb::Xid;
 pub struct XcbBackend {
     connection: xcb::Connection,
     root_window: xcb::x::Window,
+    edid_atom: xcb::x::Atom,
     output_set_state: OutputSetState,
 }
 
@@ -59,18 +60,20 @@ impl XcbBackend {
         };
 
         let output_set_state = OutputSetState::query(&connection, root_window, edid_atom)?;
-        let layout = convert_to_layout(&output_set_state);
-        dbg!(layout);
-
         Ok(XcbBackend {
             connection,
             root_window,
+            edid_atom,
             output_set_state,
         })
     }
 }
 
 impl Backend for XcbBackend {
+    fn current_layout(&self) -> layout::Layout {
+        convert_to_layout(&self.output_set_state)
+    }
+
     fn wait_for_change(&mut self, reaction_delay: Option<Duration>) -> Result<(), anyhow::Error> {
         // Wait for any randr event, then reload entire randr state.
         // Easier than patching state with notify event data.
@@ -83,8 +86,8 @@ impl Backend for XcbBackend {
                 had_randr_event |= check_randr_event(event)
             }
             if had_randr_event {
+                // If delay is requested, also flush all randr events during the delay
                 if let Some(delay) = reaction_delay {
-                    // If delay is requested, also flush all randr events during the delay
                     std::thread::sleep(delay);
                     if let Some(event) = self.connection.poll_for_event()? {
                         check_randr_event(event);
@@ -93,6 +96,8 @@ impl Backend for XcbBackend {
                         check_randr_event(event);
                     }
                 }
+                self.output_set_state =
+                    OutputSetState::query(&self.connection, self.root_window, self.edid_atom)?;
                 return Ok(());
             }
         }
@@ -262,7 +267,7 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::Layout {
             .outputs
             .values()
             .filter(|state| state.is_connected())
-            .map(|state| layout::Output {
+            .map(|state| layout::OutputEntry {
                 id: match state.edid {
                     Some(edid) => layout::OutputId::Edid(edid),
                     None => layout::OutputId::Name(state.name.clone()),

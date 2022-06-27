@@ -45,7 +45,7 @@ pub struct Mode {
     pub frequency: f64, // FIXME
 }
 
-/// Identifier for an output : , or the output name.
+/// Identifier for an output
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OutputId {
     /// [`Edid`] is prefered if available
@@ -65,7 +65,7 @@ pub enum OutputState {
 }
 
 #[derive(Debug)]
-pub struct Output {
+pub struct OutputEntry {
     pub id: OutputId,
     pub state: OutputState,
 }
@@ -77,7 +77,7 @@ pub struct Output {
 #[derive(Debug)]
 pub struct Layout {
     /// Sorted by [`OutputId`].
-    outputs: Box<[Output]>,
+    outputs: Box<[OutputEntry]>,
     /// Primary output if used / supported. Not in Wayland apparently.
     /// Used by some window manager to choose where to place tray icons, etc.
     /// Index is a reference in `enabled_outputs`.
@@ -104,8 +104,8 @@ impl OutputState {
     }
 }
 
-impl From<Vec<Output>> for Layout {
-    fn from(mut outputs: Vec<Output>) -> Layout {
+impl From<Vec<OutputEntry>> for Layout {
+    fn from(mut outputs: Vec<OutputEntry>) -> Layout {
         outputs.sort_by(|lhs, rhs| Ord::cmp(&lhs.id, &rhs.id));
         // Renormalize coordinates to fit rect{ (0, 0), (max_x, max_y) }
         let min_coords =
@@ -128,8 +128,8 @@ impl From<Vec<Output>> for Layout {
         }
     }
 }
-impl FromIterator<Output> for Layout {
-    fn from_iter<I: IntoIterator<Item = Output>>(iter: I) -> Layout {
+impl FromIterator<OutputEntry> for Layout {
+    fn from_iter<I: IntoIterator<Item = OutputEntry>>(iter: I) -> Layout {
         Layout::from(Vec::from_iter(iter))
     }
 }

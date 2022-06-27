@@ -39,17 +39,8 @@ fn main() -> Result<(), anyhow::Error> {
 
     #[cfg(feature = "xcb")]
     match slam::xcb::XcbBackend::start() {
-        Ok(mut backend) => return run_daemon(&mut backend, reaction_delay),
+        Ok(mut backend) => return slam::run_daemon(&mut backend, reaction_delay),
         Err(err) => eprintln!("Cannot start Xcb backend: {}", err),
     }
     Err(anyhow::Error::msg("No working available backend"))
-}
-
-fn run_daemon(
-    backend: &mut dyn slam::Backend,
-    reaction_delay: Option<Duration>,
-) -> Result<(), anyhow::Error> {
-    loop {
-        backend.wait_for_change(reaction_delay)?
-    }
 }
