@@ -1,5 +1,4 @@
-use crate::geometry::{Direction, InvertibleRelation, Rect, Transform, Vec2di};
-use std::cmp::Ordering;
+use crate::geometry::{Rect, Transform, Vec2di};
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -51,17 +50,24 @@ pub struct Mode {
 pub enum OutputId {
     /// [`Edid`] is prefered if available
     Edid(Edid),
-    /// Fallback to output name and monitor preferred size
+    /// Fallback to output name
     Name(String),
 }
 
-/// State and identification for an enabled output.
 #[derive(Debug)]
-pub struct EnabledOutput {
+pub enum OutputState {
+    Disabled,
+    Enabled {
+        mode: Mode,
+        transform: Transform,
+        bottom_left: Vec2di,
+    },
+}
+
+#[derive(Debug)]
+pub struct Output {
     pub id: OutputId,
-    pub mode: Mode,
-    pub transform: Transform,
-    pub bottom_left: Vec2di,
+    pub state: OutputState,
 }
 
 /// State of a set of screen outputs and their relative positionning.
@@ -69,37 +75,53 @@ pub struct EnabledOutput {
 /// Lists all connected outputs of a system.
 #[derive(Debug)]
 pub struct Layout {
-    /// Disabled outputs : only list their ids.
-    pub disabled_outputs: Box<[OutputId]>,
-    /// Enabled output states.
-    pub enabled_outputs: Box<[EnabledOutput]>,
+    /// Sorted by [`OutputId`].
+    outputs: Box<[Output]>,
     /// Primary output if used / supported. Not in Wayland apparently.
     /// Used by some window manager to choose where to place tray icons, etc.
     /// Index is a reference in `enabled_outputs`.
-    pub primary: Option<u16>,
+    primary: Option<u16>,
 }
 
 // TODO it would be useful to store data for statistical mode, with output names
 // TODO serialization
 
-impl EnabledOutput {
+impl OutputState {
     /// Rect occupied by monitor in abstract 2D space (X11 screen)
-    fn rect(&self) -> Rect {
-        Rect {
-            bottom_left: self.bottom_left.clone(),
-            size: self.mode.size.clone().apply(&self.transform),
+    fn rect(&self) -> Option<Rect> {
+        match self {
+            Self::Disabled => None,
+            Self::Enabled {
+                bottom_left,
+                mode,
+                transform,
+            } => Some(Rect {
+                bottom_left: bottom_left.clone(),
+                size: mode.size.clone().apply(transform),
+            }),
+        }
+    }
+}
+
+impl FromIterator<Output> for Layout {
+    fn from_iter<I: IntoIterator<Item = Output>>(iter: I) -> Self {
+        let mut outputs = Vec::from_iter(iter);
+        outputs.sort_by(|lhs, rhs| Ord::cmp(&lhs.id, &rhs.id));
+        Layout {
+            outputs: Vec::into_boxed_slice(outputs),
+            primary: None,
         }
     }
 }
 
 impl Layout {
-    /// Return the list of outputs ids, sorted.
-    pub fn connected_outputs(&self) -> Box<[OutputId]> {
-        let mut v = Vec::from_iter(Iterator::chain(
-            self.disabled_outputs.iter().cloned(),
-            self.enabled_outputs.iter().map(|o| o.id.clone()),
-        ));
-        v.sort_unstable();
-        Vec::into_boxed_slice(v)
-    }
+    // Return the list of outputs ids, sorted.
+    //pub fn connected_outputs(&self) -> Box<[OutputId]> {
+    //    let mut v = Vec::from_iter(Iterator::chain(
+    //        self.disabled_outputs.iter().cloned(),
+    //        self.enabled_outputs.iter().map(|o| o.id.clone()),
+    //    ));
+    //    v.sort_unstable();
+    //    Vec::into_boxed_slice(v)
+    //}
 }

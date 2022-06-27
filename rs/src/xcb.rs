@@ -1,5 +1,5 @@
-use crate::geometry::{Rect, Rotation, Transform, Vec2di};
-use crate::layout::{Edid, EnabledOutput, Layout, Mode, OutputId};
+use crate::geometry::{Rotation, Transform, Vec2di};
+use crate::layout::{self, Edid};
 use crate::Backend;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -217,7 +217,7 @@ impl OutputSetState {
         })
     }
 
-    fn mode_from_id(&self, id: xcb::randr::Mode) -> Option<Mode> {
+    fn mode_from_id(&self, id: xcb::randr::Mode) -> Option<layout::Mode> {
         if id.is_none() {
             return None;
         }
@@ -225,7 +225,7 @@ impl OutputSetState {
             .modes()
             .into_iter()
             .find(|m| m.id == id.resource_id())
-            .map(|m| Mode::from(m))
+            .map(|m| layout::Mode::from(m))
     }
 }
 
@@ -240,42 +240,36 @@ impl OutputState {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-fn convert_to_layout(output_states: &OutputSetState) -> Layout {
+fn convert_to_layout(output_states: &OutputSetState) -> layout::Layout {
     // Get output information after checking that it is properly enabled (crtc + mode).
-    let get_transform_mode_coord_if_enabled = |xcb_state: &OutputState| -> Option<_> {
-        let assigned_crtc = output_states.crtcs.get(&xcb_state.info.crtc())?;
-        let valid_mode = output_states.mode_from_id(assigned_crtc.mode())?;
-        let transform = Transform::from(assigned_crtc.rotation());
-        let bottom_left = Vec2di::new(assigned_crtc.x().into(), assigned_crtc.y().into());
-        Some((transform, valid_mode, bottom_left))
-    };
-    let mut disabled_outputs = Vec::new();
-    let mut enabled_outputs = Vec::new();
-    for state in output_states
-        .outputs
-        .iter()
-        .map(|(_, state)| state)
-        .filter(|state| state.is_connected())
-    {
-        let id = match state.edid {
-            Some(edid) => OutputId::Edid(edid),
-            None => OutputId::Name(state.name.clone()),
+    let convert_output_state = |xcb_state: &OutputState| -> layout::OutputState {
+        let assigned_crtc = match output_states.crtcs.get(&xcb_state.info.crtc()) {
+            Some(crtc) => crtc,
+            None => return layout::OutputState::Disabled,
         };
-        match get_transform_mode_coord_if_enabled(state) {
-            Some((transform, mode, bottom_left)) => enabled_outputs.push(EnabledOutput {
-                id,
-                mode,
-                transform,
-                bottom_left,
-            }),
-            None => disabled_outputs.push(id),
+        let valid_mode = match output_states.mode_from_id(assigned_crtc.mode()) {
+            Some(mode) => mode,
+            None => return layout::OutputState::Disabled,
+        };
+        layout::OutputState::Enabled {
+            mode: valid_mode,
+            transform: Transform::from(assigned_crtc.rotation()),
+            bottom_left: Vec2di::new(assigned_crtc.x().into(), assigned_crtc.y().into()),
         }
-    }
-    Layout {
-        disabled_outputs: Vec::into_boxed_slice(disabled_outputs),
-        enabled_outputs: Vec::into_boxed_slice(enabled_outputs),
-        primary: None,
-    }
+    };
+    layout::Layout::from_iter(
+        output_states
+            .outputs
+            .values()
+            .filter(|state| state.is_connected())
+            .map(|state| layout::Output {
+                id: match state.edid {
+                    Some(edid) => layout::OutputId::Edid(edid),
+                    None => layout::OutputId::Name(state.name.clone()),
+                },
+                state: convert_output_state(state),
+            }),
+    )
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -326,12 +320,12 @@ impl From<Transform> for xcb::randr::Rotation {
     }
 }
 
-impl From<&'_ xcb::randr::ModeInfo> for Mode {
-    fn from(xcb_mode: &'_ xcb::randr::ModeInfo) -> Mode {
+impl From<&'_ xcb::randr::ModeInfo> for layout::Mode {
+    fn from(xcb_mode: &'_ xcb::randr::ModeInfo) -> layout::Mode {
         let size = Vec2di::new(xcb_mode.width.into(), xcb_mode.height.into());
         let dots = u32::from(xcb_mode.htotal) * u32::from(xcb_mode.vtotal);
         assert_ne!(dots, 0, "invalid xcb::ModeInfo");
         let frequency = f64::from(xcb_mode.dot_clock) / f64::from(dots);
-        Mode { size, frequency }
+        layout::Mode { size, frequency }
     }
 }

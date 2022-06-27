@@ -1,7 +1,6 @@
 #![allow(dead_code)] // Testing only part of the code.
 
-use slam::geometry::{Rect, Transform, Vec2di};
-use slam::layout::{Edid, EnabledOutput, Layout, Mode};
+use slam::geometry::{Rect, Vec2di};
 
 // Palette with evenly distributed hues
 fn color_palette(n: usize) -> impl Iterator<Item = tiny_skia::Color> {
