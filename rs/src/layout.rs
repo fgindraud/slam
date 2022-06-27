@@ -70,9 +70,10 @@ pub struct Output {
     pub state: OutputState,
 }
 
-/// State of a set of screen outputs and their relative positionning.
+/// State of a set of screen outputs and their positionning.
 /// Intended to be stored in the database.
 /// Lists all connected outputs of a system.
+/// Positions are defined by coordinates of the bottom left corner, starting at (0,0).
 #[derive(Debug)]
 pub struct Layout {
     /// Sorted by [`OutputId`].
@@ -103,14 +104,33 @@ impl OutputState {
     }
 }
 
-impl FromIterator<Output> for Layout {
-    fn from_iter<I: IntoIterator<Item = Output>>(iter: I) -> Self {
-        let mut outputs = Vec::from_iter(iter);
+impl From<Vec<Output>> for Layout {
+    fn from(mut outputs: Vec<Output>) -> Layout {
         outputs.sort_by(|lhs, rhs| Ord::cmp(&lhs.id, &rhs.id));
+        // Renormalize coordinates to fit rect{ (0, 0), (max_x, max_y) }
+        let min_coords =
+            outputs
+                .iter()
+                .fold(Vec2di::default(), |min, output| match &output.state {
+                    OutputState::Enabled { bottom_left, .. } => {
+                        Vec2di::cwise_min(min, bottom_left.clone())
+                    }
+                    OutputState::Disabled => min,
+                });
+        for output in &mut outputs {
+            if let OutputState::Enabled { bottom_left, .. } = &mut output.state {
+                *bottom_left -= min_coords
+            }
+        }
         Layout {
             outputs: Vec::into_boxed_slice(outputs),
             primary: None,
         }
+    }
+}
+impl FromIterator<Output> for Layout {
+    fn from_iter<I: IntoIterator<Item = Output>>(iter: I) -> Layout {
+        Layout::from(Vec::from_iter(iter))
     }
 }
 

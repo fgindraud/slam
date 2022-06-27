@@ -1,4 +1,4 @@
-use std::ops::{Add, Sub};
+use std::ops::{Add, Sub, SubAssign};
 
 /// Trigonometric orientation (anti-clockwise)
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -189,7 +189,21 @@ impl<T: Sub> Sub for Vec2d<T> {
     }
 }
 
+impl <T : SubAssign> SubAssign for Vec2d<T> {
+    fn sub_assign(&mut self, rhs: Vec2d<T>) {
+        self.x -= rhs.x;
+        self.y -= rhs.y
+    }
+}
+
 impl<T: Ord> Vec2d<T> {
+    /// Component-wise min
+    pub fn cwise_min(self, rhs: Vec2d<T>) -> Vec2d<T> {
+        Vec2d {
+            x: std::cmp::min(self.x, rhs.x),
+            y: std::cmp::min(self.y, rhs.y),
+        }
+    }
     /// Component-wise max.
     fn cwise_max(self, rhs: Vec2d<T>) -> Vec2d<T> {
         Vec2d {
