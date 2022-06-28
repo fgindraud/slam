@@ -1,3 +1,4 @@
+use crate::relation::InvertibleRelation;
 use std::ops::{Add, Sub, SubAssign};
 
 /// Trigonometric orientation (anti-clockwise)
@@ -117,11 +118,6 @@ pub enum Direction {
     Under,
 }
 
-/// For a binary relation *R*, describes `inverse(R(x,y)) = R(y,x)`.
-pub trait InvertibleRelation {
-    fn inverse(&self) -> Self;
-}
-
 impl InvertibleRelation for Direction {
     fn inverse(&self) -> Direction {
         match self {
@@ -189,7 +185,7 @@ impl<T: Sub> Sub for Vec2d<T> {
     }
 }
 
-impl <T : SubAssign> SubAssign for Vec2d<T> {
+impl<T: SubAssign> SubAssign for Vec2d<T> {
     fn sub_assign(&mut self, rhs: Vec2d<T>) {
         self.x -= rhs.x;
         self.y -= rhs.y

@@ -29,7 +29,7 @@ Semantics
 ---------
 
 When the backend layout changes :
-* If the current setting is _weird_ (overlapping / clone outputs, maybe check for CRTC transform, etc) : do nothing. Also called _manual layout mode_.
+* If the current setting is _unsupported_ (overlapping / clone outputs, maybe check for CRTC transform, etc) : do nothing. Also called _manual layout mode_.
 * If the layout is what was just requested to be set: do nothing (we see our own update).
 * If the set of physical outputs is different from before (add / remove screen) :
     * If a database entry exists for this set of outputs, use the stored layout.
@@ -46,7 +46,7 @@ What is stored :
 * Primary output for X.
 
 The EDID data may be absent due to video signal forwarding equiment like cheap KVMs often present in conference rooms.
-In this case, instead of EDID, the layout will be stored by using the _output name_ (like `DP-0`) and preferred mode size.
+In this case, instead of EDID, the layout will be stored by using the _output name_ (like `DP-0`).
 This should be enough to disambiguate between two different monitors for what is useful to us : size for layouting.
 Note that this require non EDID mode monitors to use the preferred mode !
 

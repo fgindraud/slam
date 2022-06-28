@@ -1,4 +1,5 @@
 use crate::geometry::{Rect, Transform, Vec2di};
+use crate::relation::RelationMatrix;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -82,6 +83,18 @@ pub struct Layout {
     /// Used by some window manager to choose where to place tray icons, etc.
     /// Index is a reference in `enabled_outputs`.
     primary: Option<u16>,
+    /// Status : supported, or not with the reason.
+    status: LayoutStatus,
+}
+
+#[derive(Debug, Clone)]
+pub enum LayoutStatus {
+    /// Layout is usable, no gaps, no clones, no overlaps
+    Supported,
+    /// Unsupported due to overlaps
+    Overlap,
+    /// Unsupported due to gaps
+    Gaps,
 }
 
 // TODO it would be useful to store data for statistical mode, with output names
@@ -107,41 +120,68 @@ impl OutputState {
 impl From<Vec<OutputEntry>> for Layout {
     fn from(mut outputs: Vec<OutputEntry>) -> Layout {
         outputs.sort_by(|lhs, rhs| Ord::cmp(&lhs.id, &rhs.id));
-        // Renormalize coordinates to fit rect{ (0, 0), (max_x, max_y) }
-        let min_coords =
-            outputs
-                .iter()
-                .fold(Vec2di::default(), |min, output| match &output.state {
-                    OutputState::Enabled { bottom_left, .. } => {
-                        Vec2di::cwise_min(min, bottom_left.clone())
-                    }
-                    OutputState::Disabled => min,
-                });
-        for output in &mut outputs {
-            if let OutputState::Enabled { bottom_left, .. } = &mut output.state {
-                *bottom_left -= min_coords
-            }
-        }
+        normalize_bottom_left_coordinates(&mut outputs);
+        let status = check_for_overlap_and_gaps(&outputs);
         Layout {
             outputs: Vec::into_boxed_slice(outputs),
-            primary: None,
+            primary: None, // TODO way to fill this
+            status,        // TODO provide other types of errors
         }
     }
 }
+
 impl FromIterator<OutputEntry> for Layout {
-    fn from_iter<I: IntoIterator<Item = OutputEntry>>(iter: I) -> Layout {
+    fn from_iter<I: IntoIterator<Item = OutputEntry>>(iter: I) -> Self {
         Layout::from(Vec::from_iter(iter))
     }
 }
 
 impl Layout {
-    // Return the list of outputs ids, sorted.
-    //pub fn connected_outputs(&self) -> Box<[OutputId]> {
-    //    let mut v = Vec::from_iter(Iterator::chain(
-    //        self.disabled_outputs.iter().cloned(),
-    //        self.enabled_outputs.iter().map(|o| o.id.clone()),
-    //    ));
-    //    v.sort_unstable();
-    //    Vec::into_boxed_slice(v)
-    //}
+    /// Return the list of outputs ids, sorted.
+    pub fn connected_outputs<'l>(
+        &'l self,
+    ) -> impl Iterator<Item = &'l OutputId> + ExactSizeIterator + DoubleEndedIterator {
+        self.outputs.iter().map(|o| &o.id)
+    }
+
+    pub fn status(&self) -> LayoutStatus {
+        self.status.clone()
+    }
+}
+
+/// Renormalize coordinates to fit `Rect { (0, 0), (max_x, max_y) }`
+fn normalize_bottom_left_coordinates(outputs: &mut [OutputEntry]) {
+    let min_coords = outputs
+        .iter()
+        .fold(Vec2di::default(), |min, output| match &output.state {
+            OutputState::Enabled { bottom_left, .. } => Vec2di::cwise_min(min, bottom_left.clone()),
+            OutputState::Disabled => min,
+        });
+    for output in outputs {
+        if let OutputState::Enabled { bottom_left, .. } = &mut output.state {
+            *bottom_left -= min_coords
+        }
+    }
+}
+
+/// Check gaps and overlaps between enabled outputs rects
+fn check_for_overlap_and_gaps(outputs: &[OutputEntry]) -> LayoutStatus {
+    let rects = Vec::from_iter(outputs.iter().filter_map(|o| o.state.rect()));
+    let size = rects.len();
+    let mut relations = RelationMatrix::new(size);
+    for rhs in 1..size {
+        let rhs_rect = &rects[rhs];
+        for lhs in 0..rhs {
+            let lhs_rect = &rects[lhs];
+            if lhs_rect.overlaps(rhs_rect) {
+                return LayoutStatus::Overlap;
+            }
+            relations.set(lhs, rhs, Rect::adjacent_direction(lhs_rect, rhs_rect))
+        }
+    }
+    if relations.is_single_connected_component() {
+        LayoutStatus::Supported
+    } else {
+        LayoutStatus::Gaps
+    }
 }

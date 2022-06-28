@@ -262,19 +262,18 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::Layout {
             bottom_left: Vec2di::new(assigned_crtc.x().into(), assigned_crtc.y().into()),
         }
     };
-    layout::Layout::from_iter(
-        output_states
-            .outputs
-            .values()
-            .filter(|state| state.is_connected())
-            .map(|state| layout::OutputEntry {
-                id: match state.edid {
-                    Some(edid) => layout::OutputId::Edid(edid),
-                    None => layout::OutputId::Name(state.name.clone()),
-                },
-                state: convert_output_state(state),
-            }),
-    )
+    output_states
+        .outputs
+        .values()
+        .filter(|state| state.is_connected())
+        .map(|state| layout::OutputEntry {
+            id: match state.edid {
+                Some(edid) => layout::OutputId::Edid(edid),
+                None => layout::OutputId::Name(state.name.clone()),
+            },
+            state: convert_output_state(state),
+        })
+        .collect()
 }
 
 ///////////////////////////////////////////////////////////////////////////////
