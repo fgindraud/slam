@@ -46,6 +46,15 @@ pub struct Mode {
     pub frequency: f64, // FIXME
 }
 
+impl PartialEq for Mode {
+    fn eq(&self, other: &Self) -> bool {
+        self.size == other.size && f64::abs(self.frequency - other.frequency) < 0.5
+    }
+}
+impl Eq for Mode {}
+
+///////////////////////////////////////////////////////////////////////////////
+
 /// Identifier for an output
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OutputId {
@@ -55,7 +64,7 @@ pub enum OutputId {
     Name(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum OutputState {
     Disabled,
     Enabled {
@@ -65,7 +74,7 @@ pub enum OutputState {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct OutputEntry {
     pub id: OutputId,
     pub state: OutputState,
@@ -75,7 +84,7 @@ pub struct OutputEntry {
 /// Intended to be stored in the database.
 /// Lists all connected outputs of a system.
 /// Positions are defined by coordinates of the bottom left corner, starting at (0,0).
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Layout {
     /// Sorted by [`OutputId`].
     outputs: Box<[OutputEntry]>,
@@ -83,11 +92,9 @@ pub struct Layout {
     /// Used by some window manager to choose where to place tray icons, etc.
     /// Index is a reference in `enabled_outputs`.
     primary: Option<u16>,
-    /// Status : supported, or not with the reason.
-    status: LayoutStatus,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LayoutStatus {
     /// Layout is usable, no gaps, no clones, no overlaps
     Supported,
@@ -95,6 +102,8 @@ pub enum LayoutStatus {
     Overlap,
     /// Unsupported due to gaps
     Gaps,
+    /// Unsupported due to clones
+    Clones,
 }
 
 // TODO it would be useful to store data for statistical mode, with output names
@@ -117,35 +126,31 @@ impl OutputState {
     }
 }
 
-impl From<Vec<OutputEntry>> for Layout {
-    fn from(mut outputs: Vec<OutputEntry>) -> Layout {
-        outputs.sort_by(|lhs, rhs| Ord::cmp(&lhs.id, &rhs.id));
-        normalize_bottom_left_coordinates(&mut outputs);
-        let status = check_for_overlap_and_gaps(&outputs);
-        Layout {
-            outputs: Vec::into_boxed_slice(outputs),
-            primary: None, // TODO way to fill this
-            status,        // TODO provide other types of errors
-        }
-    }
-}
-
-impl FromIterator<OutputEntry> for Layout {
+impl FromIterator<OutputEntry> for (Layout, LayoutStatus) {
     fn from_iter<I: IntoIterator<Item = OutputEntry>>(iter: I) -> Self {
         Layout::from(Vec::from_iter(iter))
     }
 }
 
 impl Layout {
+    pub fn from(mut outputs: Vec<OutputEntry>) -> (Layout, LayoutStatus) {
+        outputs.sort_by(|lhs, rhs| Ord::cmp(&lhs.id, &rhs.id));
+        normalize_bottom_left_coordinates(&mut outputs);
+        let status = check_for_overlap_and_gaps(&outputs);
+        (
+            Layout {
+                outputs: Vec::into_boxed_slice(outputs),
+                primary: None, // TODO way to fill this
+            },
+            status,
+        )
+    }
+
     /// Return the list of outputs ids, sorted.
     pub fn connected_outputs<'l>(
         &'l self,
     ) -> impl Iterator<Item = &'l OutputId> + ExactSizeIterator + DoubleEndedIterator {
         self.outputs.iter().map(|o| &o.id)
-    }
-
-    pub fn status(&self) -> LayoutStatus {
-        self.status.clone()
     }
 }
 

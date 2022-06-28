@@ -70,7 +70,7 @@ impl XcbBackend {
 }
 
 impl Backend for XcbBackend {
-    fn current_layout(&self) -> layout::Layout {
+    fn current_layout(&self) -> (layout::Layout, layout::LayoutStatus) {
         convert_to_layout(&self.output_set_state)
     }
 
@@ -245,7 +245,7 @@ impl OutputState {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-fn convert_to_layout(output_states: &OutputSetState) -> layout::Layout {
+fn convert_to_layout(output_states: &OutputSetState) -> (layout::Layout, layout::LayoutStatus) {
     // Get output information after checking that it is properly enabled (crtc + mode).
     let convert_output_state = |xcb_state: &OutputState| -> layout::OutputState {
         let assigned_crtc = match output_states.crtcs.get(&xcb_state.info.crtc()) {
@@ -262,7 +262,7 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::Layout {
             bottom_left: Vec2di::new(assigned_crtc.x().into(), assigned_crtc.y().into()),
         }
     };
-    output_states
+    let (layout, mut status) = output_states
         .outputs
         .values()
         .filter(|state| state.is_connected())
@@ -273,7 +273,15 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::Layout {
             },
             state: convert_output_state(state),
         })
-        .collect()
+        .collect();
+    // Post check for clones
+    for output in output_states.outputs.values() {
+        if !output.info.clones().is_empty() {
+            status = layout::LayoutStatus::Clones;
+            break;
+        }
+    }
+    (layout, status)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
