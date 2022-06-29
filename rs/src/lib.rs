@@ -9,7 +9,7 @@ pub mod relation;
 
 pub trait Backend {
     /// Access the current layout and support status.
-    fn current_layout(&self) -> (layout::Layout, layout::LayoutStatus);
+    fn current_layout(&self) -> layout::LayoutInfo;
 
     /// Wait for a change in backend layout.
     /// Error should represent a *hard unrecoverable* error like X server connection failure.
@@ -25,11 +25,14 @@ pub fn run_daemon(
     backend: &mut dyn Backend,
     reaction_delay: Option<Duration>,
 ) -> Result<(), anyhow::Error> {
-    let (mut layout, _) = backend.current_layout();
+    let layout::LayoutInfo { mut layout, .. } = backend.current_layout();
     loop {
         dbg!(&layout);
         backend.wait_for_change(reaction_delay)?;
-        let (new_layout, status) = backend.current_layout();
+        let layout::LayoutInfo {
+            layout: new_layout,
+            status,
+        } = backend.current_layout();
         // Select behavior
         if status != layout::LayoutStatus::Supported {
             log::warn!("unsupported layout ({:?}), ignored", status)

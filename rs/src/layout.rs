@@ -90,8 +90,7 @@ pub struct Layout {
     outputs: Box<[OutputEntry]>,
     /// Primary output if used / supported. Not in Wayland apparently.
     /// Used by some window manager to choose where to place tray icons, etc.
-    /// Index is a reference in `enabled_outputs`.
-    primary: Option<u16>,
+    primary: Option<OutputId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +103,12 @@ pub enum LayoutStatus {
     Gaps,
     /// Unsupported due to clones
     Clones,
+}
+
+#[derive(Debug)]
+pub struct LayoutInfo {
+    pub layout: Layout,
+    pub status: LayoutStatus,
 }
 
 // TODO it would be useful to store data for statistical mode, with output names
@@ -126,31 +131,30 @@ impl OutputState {
     }
 }
 
-impl FromIterator<OutputEntry> for (Layout, LayoutStatus) {
-    fn from_iter<I: IntoIterator<Item = OutputEntry>>(iter: I) -> Self {
-        Layout::from(Vec::from_iter(iter))
-    }
-}
-
 impl Layout {
-    pub fn from(mut outputs: Vec<OutputEntry>) -> (Layout, LayoutStatus) {
-        outputs.sort_by(|lhs, rhs| Ord::cmp(&lhs.id, &rhs.id));
-        normalize_bottom_left_coordinates(&mut outputs);
-        let status = check_for_overlap_and_gaps(&outputs);
-        (
-            Layout {
-                outputs: Vec::into_boxed_slice(outputs),
-                primary: None, // TODO way to fill this
-            },
-            status,
-        )
-    }
-
     /// Return the list of outputs ids, sorted.
     pub fn connected_outputs<'l>(
         &'l self,
     ) -> impl Iterator<Item = &'l OutputId> + ExactSizeIterator + DoubleEndedIterator {
         self.outputs.iter().map(|o| &o.id)
+    }
+}
+
+impl LayoutInfo {
+    /// primary is supposed to point to a connected and enabled output (not checked)
+    pub fn from(mut outputs: Vec<OutputEntry>, primary: Option<OutputId>) -> LayoutInfo {
+        outputs.sort_by(|lhs, rhs| Ord::cmp(&lhs.id, &rhs.id));
+        normalize_bottom_left_coordinates(&mut outputs);
+        let status = check_for_overlap_and_gaps(&outputs);
+        let layout = Layout {
+            outputs: Vec::into_boxed_slice(outputs),
+            primary,
+        };
+        LayoutInfo { layout, status }
+    }
+
+    pub fn from_iter<I: IntoIterator<Item = OutputEntry>>(iter: I, primary: Option<OutputId>) -> Self {
+        LayoutInfo::from(Vec::from_iter(iter), primary)
     }
 }
 

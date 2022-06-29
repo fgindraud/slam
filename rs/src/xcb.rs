@@ -70,7 +70,7 @@ impl XcbBackend {
 }
 
 impl Backend for XcbBackend {
-    fn current_layout(&self) -> (layout::Layout, layout::LayoutStatus) {
+    fn current_layout(&self) -> layout::LayoutInfo {
         convert_to_layout(&self.output_set_state)
     }
 
@@ -121,6 +121,7 @@ struct OutputSetState {
     ressources: xcb::randr::GetScreenResourcesReply,
     crtcs: HashMap<xcb::randr::Crtc, xcb::randr::GetCrtcInfoReply>,
     outputs: HashMap<xcb::randr::Output, OutputState>,
+    primary: Option<xcb::randr::Output>,
 }
 #[derive(Debug)]
 struct OutputState {
@@ -148,7 +149,11 @@ impl OutputSetState {
         }
 
         // Screen ressources must be done first, as it gives timestamps and output/crtc ids required for other requests.
+        // Also ask for primary output as it does not depend on anything.
         let ressources_req = conn.send_request(&xcb::randr::GetScreenResources {
+            window: root_window,
+        });
+        let primary_request = conn.send_request(&xcb::randr::GetOutputPrimary {
             window: root_window,
         });
         let ressources = conn.wait_for_reply(ressources_req)?;
@@ -199,6 +204,7 @@ impl OutputSetState {
                 },
                 xcb::x::ATOM_NONE => None,
                 atom => {
+                    // Fail for other atoms, but decode and log them anyway for debugging
                     let atom_name_req = conn.send_request(&xcb::x::GetAtomName { atom });
                     let atom_name_reply = conn.wait_for_reply(atom_name_req)?;
                     let atom_name = atom_name_reply.name();
@@ -215,17 +221,19 @@ impl OutputSetState {
         let crtcs = Result::from_iter(crtc_requests.into_iter().map(process_crtc_reply))?;
         let outputs = Result::from_iter(output_requests.into_iter().map(process_output_replies))?;
 
+        // End with primary request. This is a Xid so filter for nones
+        let primary_reply = conn.wait_for_reply(primary_request)?;
+
         Ok(OutputSetState {
             ressources,
             crtcs,
             outputs,
+            primary: filter_xid(primary_reply.output()),
         })
     }
 
     fn mode_from_id(&self, id: xcb::randr::Mode) -> Option<layout::Mode> {
-        if id.is_none() {
-            return None;
-        }
+        let id = filter_xid(id)?;
         self.ressources
             .modes()
             .into_iter()
@@ -245,7 +253,11 @@ impl OutputState {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-fn convert_to_layout(output_states: &OutputSetState) -> (layout::Layout, layout::LayoutStatus) {
+fn convert_to_layout(output_states: &OutputSetState) -> layout::LayoutInfo {
+    let convert_to_output_id = |state: &OutputState| match state.edid {
+        Some(edid) => layout::OutputId::Edid(edid),
+        None => layout::OutputId::Name(state.name.clone()),
+    };
     // Get output information after checking that it is properly enabled (crtc + mode).
     let convert_output_state = |xcb_state: &OutputState| -> layout::OutputState {
         let assigned_crtc = match output_states.crtcs.get(&xcb_state.info.crtc()) {
@@ -262,26 +274,29 @@ fn convert_to_layout(output_states: &OutputSetState) -> (layout::Layout, layout:
             bottom_left: Vec2di::new(assigned_crtc.x().into(), assigned_crtc.y().into()),
         }
     };
-    let (layout, mut status) = output_states
-        .outputs
-        .values()
-        .filter(|state| state.is_connected())
-        .map(|state| layout::OutputEntry {
-            id: match state.edid {
-                Some(edid) => layout::OutputId::Edid(edid),
-                None => layout::OutputId::Name(state.name.clone()),
-            },
-            state: convert_output_state(state),
-        })
-        .collect();
+    let primary_id = output_states
+        .primary
+        .and_then(|id| output_states.outputs.get(&id))
+        .map(convert_to_output_id);
+    let mut info = layout::LayoutInfo::from_iter(
+        output_states
+            .outputs
+            .values()
+            .filter(|state| state.is_connected())
+            .map(|state| layout::OutputEntry {
+                id: convert_to_output_id(state),
+                state: convert_output_state(state),
+            }),
+        primary_id,
+    );
     // Post check for clones
     for output in output_states.outputs.values() {
         if !output.info.clones().is_empty() {
-            status = layout::LayoutStatus::Clones;
+            info.status = layout::LayoutStatus::Clones;
             break;
         }
     }
-    (layout, status)
+    info
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -339,5 +354,13 @@ impl From<&'_ xcb::randr::ModeInfo> for layout::Mode {
         assert_ne!(dots, 0, "invalid xcb::ModeInfo");
         let frequency = f64::from(xcb_mode.dot_clock) / f64::from(dots);
         layout::Mode { size, frequency }
+    }
+}
+
+fn filter_xid<T: Xid>(id: T) -> Option<T> {
+    if id.is_none() {
+        None
+    } else {
+        Some(id)
     }
 }
