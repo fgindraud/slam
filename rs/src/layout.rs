@@ -5,7 +5,7 @@ use crate::relation::RelationMatrix;
 
 /// Bytes 8 to 15 of EDID header, containing manufacturer id + serial number.
 /// This should be sufficient for unique identification of a display.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct Edid(u64);
 
 impl std::fmt::Debug for Edid {
@@ -17,16 +17,16 @@ impl std::fmt::Debug for Edid {
 /// Build from raw full EDID data.
 impl<'a> TryFrom<&'a [u8]> for Edid {
     type Error = &'static str;
-    fn try_from(bytes: &'a [u8]) -> Result<Edid, &'static str> {
-        if !(bytes.len() >= 16) {
+    fn try_from(edid_entry_bytes: &'a [u8]) -> Result<Edid, &'static str> {
+        if !(edid_entry_bytes.len() >= 16) {
             // Very permissive here as we only need the bytes 8-15.
             // EDID standard has at least 128 bytes from 1.0 upwards.
             return Err("Edid: bad length");
         }
-        if bytes[0..8] != [0x0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x0] {
+        if edid_entry_bytes[0..8] != [0x0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x0] {
             return Err("Edid: missing constant header pattern");
         }
-        let id_bytes: [u8; 8] = bytes[8..16].try_into().unwrap();
+        let id_bytes: [u8; 8] = edid_entry_bytes[8..16].try_into().unwrap();
         Ok(Edid(u64::from_be_bytes(id_bytes)))
     }
 }
@@ -40,7 +40,7 @@ impl From<u64> for Edid {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Mode {
     pub size: Vec2di,
     pub frequency: f64, // FIXME
@@ -56,7 +56,7 @@ impl Eq for Mode {}
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Identifier for an output
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub enum OutputId {
     /// [`Edid`] is prefered if available
     Edid(Edid),
@@ -64,7 +64,7 @@ pub enum OutputId {
     Name(String),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub enum OutputState {
     Disabled,
     Enabled {
@@ -74,7 +74,7 @@ pub enum OutputState {
     },
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub struct OutputEntry {
     pub id: OutputId,
     pub state: OutputState,
@@ -84,35 +84,33 @@ pub struct OutputEntry {
 /// Intended to be stored in the database.
 /// Lists all connected outputs of a system.
 /// Positions are defined by coordinates of the bottom left corner, starting at (0,0).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Layout {
     /// Sorted by [`OutputId`].
     outputs: Box<[OutputEntry]>,
+    // TODO special deserialize with validation ?
     /// Primary output if used / supported. Not in Wayland apparently.
     /// Used by some window manager to choose where to place tray icons, etc.
     primary: Option<OutputId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LayoutStatus {
-    /// Layout is usable, no gaps, no clones, no overlaps
-    Supported,
-    /// Unsupported due to overlaps
-    Overlap,
-    /// Unsupported due to gaps
-    Gaps,
-    /// Unsupported due to clones
-    Clones,
+bitflags::bitflags! {
+    pub struct UnsupportedCauses: u8 {
+        /// Some output rects overlap
+        const OVERLAPS = 0b00000001;
+        /// Output rects are not all connected to each other
+        const GAPS = 0b00000010;
+        /// Using clone mode
+        const CLONES = 0b00000100;
+    }
 }
 
 #[derive(Debug)]
 pub struct LayoutInfo {
     pub layout: Layout,
-    pub status: LayoutStatus,
+    pub unsupported_causes: UnsupportedCauses,
+    // TODO it would be useful to store data for statistical mode, with output names
 }
-
-// TODO it would be useful to store data for statistical mode, with output names
-// TODO serialization
 
 impl OutputState {
     /// Rect occupied by monitor in abstract 2D space (X11 screen)
@@ -145,15 +143,21 @@ impl LayoutInfo {
     pub fn from(mut outputs: Vec<OutputEntry>, primary: Option<OutputId>) -> LayoutInfo {
         outputs.sort_by(|lhs, rhs| Ord::cmp(&lhs.id, &rhs.id));
         normalize_bottom_left_coordinates(&mut outputs);
-        let status = check_for_overlap_and_gaps(&outputs);
+        let unsupported_causes = check_for_overlap_and_gaps(&outputs);
         let layout = Layout {
             outputs: Vec::into_boxed_slice(outputs),
             primary,
         };
-        LayoutInfo { layout, status }
+        LayoutInfo {
+            layout,
+            unsupported_causes,
+        }
     }
 
-    pub fn from_iter<I: IntoIterator<Item = OutputEntry>>(iter: I, primary: Option<OutputId>) -> Self {
+    pub fn from_iter<I: IntoIterator<Item = OutputEntry>>(
+        iter: I,
+        primary: Option<OutputId>,
+    ) -> Self {
         LayoutInfo::from(Vec::from_iter(iter), primary)
     }
 }
@@ -174,7 +178,8 @@ fn normalize_bottom_left_coordinates(outputs: &mut [OutputEntry]) {
 }
 
 /// Check gaps and overlaps between enabled outputs rects
-fn check_for_overlap_and_gaps(outputs: &[OutputEntry]) -> LayoutStatus {
+fn check_for_overlap_and_gaps(outputs: &[OutputEntry]) -> UnsupportedCauses {
+    let mut unsupported_causes = UnsupportedCauses::empty();
     let rects = Vec::from_iter(outputs.iter().filter_map(|o| o.state.rect()));
     let size = rects.len();
     let mut relations = RelationMatrix::new(size);
@@ -183,14 +188,13 @@ fn check_for_overlap_and_gaps(outputs: &[OutputEntry]) -> LayoutStatus {
         for lhs in 0..rhs {
             let lhs_rect = &rects[lhs];
             if lhs_rect.overlaps(rhs_rect) {
-                return LayoutStatus::Overlap;
+                unsupported_causes |= UnsupportedCauses::OVERLAPS;
             }
             relations.set(lhs, rhs, Rect::adjacent_direction(lhs_rect, rhs_rect))
         }
     }
-    if relations.is_single_connected_component() {
-        LayoutStatus::Supported
-    } else {
-        LayoutStatus::Gaps
+    if !relations.is_single_connected_component() {
+        unsupported_causes |= UnsupportedCauses::GAPS
     }
+    unsupported_causes
 }

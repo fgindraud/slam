@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+/// Layout database.
+pub mod database;
 /// Basic geometric primitives.
 pub mod geometry;
 /// Output layouts definitions and utils.
@@ -28,14 +30,18 @@ pub fn run_daemon(
     let layout::LayoutInfo { mut layout, .. } = backend.current_layout();
     loop {
         dbg!(&layout);
+        {
+            let mut file = std::io::BufWriter::new(std::fs::File::create("test.json")?);
+            serde_json::to_writer_pretty(file, &layout)?;
+        }
         backend.wait_for_change(reaction_delay)?;
         let layout::LayoutInfo {
             layout: new_layout,
-            status,
+            unsupported_causes,
         } = backend.current_layout();
         // Select behavior
-        if status != layout::LayoutStatus::Supported {
-            log::warn!("unsupported layout ({:?}), ignored", status)
+        if !unsupported_causes.is_empty() {
+            log::warn!("unsupported layout ({:?}), ignored", unsupported_causes)
         } else if new_layout == layout {
             // if layout is the same as last seen or requested : ignore
             log::debug!("layout unchanged, ignored")

@@ -10,11 +10,19 @@ keywords = ["screen", "daemon", "x11"]
 
 [dependencies]
 anyhow = "1.0"
-dirs = "4.0" # config dir
 clap = { version = "3.1", features = ["derive"] } # cmd line parsing
+bitflags = "1.3"
+
+# Logging stuff
 log = "0.4"
 simple_logger = "2"
+
 osqp = "0.6.2" # quadratic solver for layout inference
+
+# Database related
+dirs = "4.0" # config dir
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 
 # xcb backend: feature "xcb"
 xcb = { version = "1.1", features = ["randr"], optional = true }

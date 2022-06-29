@@ -290,11 +290,12 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::LayoutInfo {
         primary_id,
     );
     // Post check for clones
-    for output in output_states.outputs.values() {
-        if !output.info.clones().is_empty() {
-            info.status = layout::LayoutStatus::Clones;
-            break;
-        }
+    if output_states
+        .outputs
+        .values()
+        .any(|output| !output.info.clones().is_empty())
+    {
+        info.unsupported_causes |= layout::UnsupportedCauses::CLONES;
     }
     info
 }
