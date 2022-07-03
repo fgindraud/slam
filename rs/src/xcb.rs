@@ -353,9 +353,13 @@ impl From<&'_ xcb::randr::ModeInfo> for layout::Mode {
         let size = Vec2di::new(xcb_mode.width.into(), xcb_mode.height.into());
         let dots = u32::from(xcb_mode.htotal) * u32::from(xcb_mode.vtotal);
         assert_ne!(dots, 0, "invalid xcb::ModeInfo");
-        let frequency = f64::from(xcb_mode.dot_clock) / f64::from(dots);
+        let frequency = div_round(xcb_mode.dot_clock, dots);
         layout::Mode { size, frequency }
     }
+}
+
+fn div_round(lhs: u32, rhs: u32) -> u32 {
+    (lhs + rhs / 2) / rhs
 }
 
 fn filter_xid<T: Xid>(id: T) -> Option<T> {

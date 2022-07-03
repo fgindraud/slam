@@ -40,18 +40,11 @@ impl From<u64> for Edid {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct Mode {
     pub size: Vec2di,
-    pub frequency: f64, // FIXME
+    pub frequency: u32,
 }
-
-impl PartialEq for Mode {
-    fn eq(&self, other: &Self) -> bool {
-        self.size == other.size && f64::abs(self.frequency - other.frequency) < 0.5
-    }
-}
-impl Eq for Mode {}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -64,7 +57,7 @@ pub enum OutputId {
     Name(String),
 }
 
-#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub enum OutputState {
     Disabled,
     Enabled {
@@ -74,7 +67,7 @@ pub enum OutputState {
     },
 }
 
-#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct OutputEntry {
     pub id: OutputId,
     pub state: OutputState,
@@ -141,7 +134,7 @@ impl Layout {
 impl LayoutInfo {
     /// primary is supposed to point to a connected and enabled output (not checked)
     pub fn from(mut outputs: Vec<OutputEntry>, primary: Option<OutputId>) -> LayoutInfo {
-        outputs.sort_by(|lhs, rhs| Ord::cmp(&lhs.id, &rhs.id));
+        outputs.sort();
         normalize_bottom_left_coordinates(&mut outputs);
         let unsupported_causes = check_for_overlap_and_gaps(&outputs);
         let layout = Layout {
