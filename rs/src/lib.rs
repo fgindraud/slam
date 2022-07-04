@@ -44,7 +44,8 @@ pub fn run_daemon(
             log::debug!("layout unchanged, ignored")
         } else if Iterator::eq(new_layout.connected_outputs(), layout.connected_outputs()) {
             // same outputs but changes : store to db
-            // TODO
+            log::info!("layout updated by user, storing to database");
+            database.store(new_layout.clone())?
         } else {
             // if new output set : apply from DB, or autolayout a new one
             // TODO

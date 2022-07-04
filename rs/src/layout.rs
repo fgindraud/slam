@@ -1,5 +1,3 @@
-use std::fmt::format;
-
 use crate::geometry::{Rect, Transform, Vec2di};
 use crate::relation::RelationMatrix;
 
@@ -63,7 +61,7 @@ pub enum OutputId {
     Name(String),
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum OutputState {
     Disabled,
     Enabled {
@@ -73,7 +71,7 @@ pub enum OutputState {
     },
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct OutputEntry {
     pub id: OutputId,
     pub state: OutputState,
@@ -83,7 +81,7 @@ pub struct OutputEntry {
 /// Intended to be stored in the database.
 /// Lists all connected outputs of a system.
 /// Positions are defined by coordinates of the bottom left corner, starting at (0,0).
-#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Layout {
     /// Sorted by [`OutputId`].
     #[serde(deserialize_with = "deserialize_layout_entries")]

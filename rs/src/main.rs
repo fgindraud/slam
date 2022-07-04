@@ -28,6 +28,7 @@ fn run_with_logging(options: DaemonOptions) -> Result<(), anyhow::Error> {
             ))?;
             p.push("slam");
             p.push("database.json");
+            log::info!("using database location {}", p.display());
             p
         }
     };
