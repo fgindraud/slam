@@ -1,3 +1,5 @@
+use std::fmt::format;
+
 use crate::geometry::{Rect, Transform, Vec2di};
 use crate::relation::RelationMatrix;
 
@@ -5,7 +7,9 @@ use crate::relation::RelationMatrix;
 
 /// Bytes 8 to 15 of EDID header, containing manufacturer id + serial number.
 /// This should be sufficient for unique identification of a display.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Edid(u64);
 
 impl std::fmt::Debug for Edid {
@@ -40,7 +44,7 @@ impl From<u64> for Edid {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct Mode {
     pub size: Vec2di,
     pub frequency: u32,
@@ -49,7 +53,9 @@ pub struct Mode {
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Identifier for an output
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum OutputId {
     /// [`Edid`] is prefered if available
     Edid(Edid),
@@ -57,7 +63,7 @@ pub enum OutputId {
     Name(String),
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum OutputState {
     Disabled,
     Enabled {
@@ -67,7 +73,7 @@ pub enum OutputState {
     },
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct OutputEntry {
     pub id: OutputId,
     pub state: OutputState,
@@ -77,9 +83,10 @@ pub struct OutputEntry {
 /// Intended to be stored in the database.
 /// Lists all connected outputs of a system.
 /// Positions are defined by coordinates of the bottom left corner, starting at (0,0).
-#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Layout {
     /// Sorted by [`OutputId`].
+    #[serde(deserialize_with = "deserialize_layout_entries")]
     outputs: Box<[OutputEntry]>,
     // TODO special deserialize with validation ?
     /// Primary output if used / supported. Not in Wayland apparently.
@@ -152,6 +159,26 @@ impl LayoutInfo {
         primary: Option<OutputId>,
     ) -> Self {
         LayoutInfo::from(Vec::from_iter(iter), primary)
+    }
+}
+
+/// Validate and normalize layout contents
+fn deserialize_layout_entries<'de, D>(deserializer: D) -> Result<Box<[OutputEntry]>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut entries: Box<[OutputEntry]> = serde::Deserialize::deserialize(deserializer)?;
+    entries.sort();
+    normalize_bottom_left_coordinates(&mut entries);
+    let unsupported = check_for_overlap_and_gaps(&entries);
+    if unsupported != UnsupportedCauses::empty() {
+        use serde::de::Error;
+        Err(D::Error::custom(format!(
+            "unsupported layout: {:?}",
+            unsupported
+        )))
+    } else {
+        Ok(entries)
     }
 }
 

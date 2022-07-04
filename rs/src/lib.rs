@@ -26,14 +26,11 @@ pub mod xcb;
 pub fn run_daemon(
     backend: &mut dyn Backend,
     reaction_delay: Option<Duration>,
+    database: &mut database::Database,
 ) -> Result<(), anyhow::Error> {
     let layout::LayoutInfo { mut layout, .. } = backend.current_layout();
     loop {
         dbg!(&layout);
-        {
-            let mut file = std::io::BufWriter::new(std::fs::File::create("test.json")?);
-            serde_json::to_writer_pretty(file, &layout)?;
-        }
         backend.wait_for_change(reaction_delay)?;
         let layout::LayoutInfo {
             layout: new_layout,

@@ -1,5 +1,7 @@
 use clap::Parser;
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::time::Duration;
 
 #[derive(Debug, Parser)]
 #[clap(version, about)]
@@ -17,11 +19,7 @@ struct DaemonOptions {
     reaction_delay: Option<u64>,
 }
 
-fn main() -> Result<(), anyhow::Error> {
-    let options = DaemonOptions::parse();
-
-    simple_logger::init_with_level(options.log_level.unwrap_or(log::Level::Warn))?;
-
+fn run_with_logging(options: DaemonOptions) -> Result<(), anyhow::Error> {
     let database_path = match options.database {
         Some(path) => path,
         None => {
@@ -33,14 +31,27 @@ fn main() -> Result<(), anyhow::Error> {
             p
         }
     };
-    dbg!(database_path);
 
     let reaction_delay = options.reaction_delay.map(Duration::from_secs);
+    let mut database = slam::database::Database::load_or_empty(database_path)?;
 
     #[cfg(feature = "xcb")]
     match slam::xcb::XcbBackend::start() {
-        Ok(mut backend) => return slam::run_daemon(&mut backend, reaction_delay),
-        Err(err) => eprintln!("Cannot start Xcb backend: {}", err),
+        Ok(mut backend) => return slam::run_daemon(&mut backend, reaction_delay, &mut database),
+        Err(e) => log::info!("cannot start Xcb backend: {}", e),
     }
-    Err(anyhow::Error::msg("No working available backend"))
+    Err(anyhow::Error::msg("no working available backend"))
+}
+
+fn main() -> ExitCode {
+    let options = DaemonOptions::parse();
+    simple_logger::init_with_level(options.log_level.unwrap_or(log::Level::Warn))
+        .expect("first logger set");
+    match run_with_logging(options) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            log::error!("{}", e);
+            ExitCode::FAILURE
+        }
+    }
 }

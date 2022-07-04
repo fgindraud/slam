@@ -2,7 +2,7 @@ use crate::relation::InvertibleRelation;
 use std::ops::{Add, Sub, SubAssign};
 
 /// Trigonometric orientation (anti-clockwise)
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum Rotation {
     R0 = 0,
     R90 = 1,
@@ -36,7 +36,7 @@ impl Rotation {
 
 /// Transformation type with unique representation for all screen 90° rotations and x/y reflects.
 /// Internally this is a reflect along X coordinates followed by the rotation (trigonometric).
-#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct Transform {
     pub reflect: bool,
     pub rotation: Rotation,
@@ -137,7 +137,18 @@ impl InvertibleRelation for Direction {
 pub type Vec2di = Vec2d<i32>;
 
 /// Generic pair type. Specialised for coordinates as [`Vec2di`].
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Vec2d<T> {
     pub x: T,
     pub y: T,
