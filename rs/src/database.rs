@@ -1,15 +1,13 @@
-use anyhow::Context;
-
 use crate::layout::Layout;
+use anyhow::Context;
 use std::collections::HashSet;
-use std::hash::Hash;
 use std::io::BufWriter;
 use std::path::PathBuf;
 
-/// Provide [`Eq`]+[`Hash`] on the sorted ids of layout.
+/// Provide [`Eq`]+[`std::hash::Hash`] on the sorted ids of layout.
 /// [`serde_json`] flattens *newtypes* so this layer has no impact on serialization format.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct LayoutById(Layout);
+pub struct LayoutById(pub Layout);
 
 impl PartialEq for LayoutById {
     fn eq(&self, other: &Self) -> bool {
@@ -17,8 +15,7 @@ impl PartialEq for LayoutById {
     }
 }
 impl Eq for LayoutById {}
-
-impl Hash for LayoutById {
+impl std::hash::Hash for LayoutById {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         for id in self.0.connected_outputs() {
             id.hash(state)
@@ -26,6 +23,7 @@ impl Hash for LayoutById {
     }
 }
 
+/// Database of known layouts, stored in memory with a file backing using [`serde_json`].
 pub struct Database {
     layouts: HashSet<LayoutById>,
     path: PathBuf,
@@ -53,7 +51,7 @@ impl Database {
     /// Store a layout, and update the file database.
     /// To avoid breaking an existing database if the serialization fails in the middle,
     /// the database is serialized to a temporary file, then moved on success.
-    pub fn store(&mut self, layout: Layout) -> Result<(), anyhow::Error> {
+    pub fn store_layout(&mut self, layout: Layout) -> Result<(), anyhow::Error> {
         self.layouts.replace(LayoutById(layout));
         // Write db to tmp file
         let mut tmp_path = self.path.clone();
@@ -79,5 +77,13 @@ impl Database {
                 tmp_path.display()
             )
         })
+    }
+
+    /// Get stored layout for given output ids.
+    /// 
+    /// It does not seem possible to use the alternate key type mode as [`std::borrow::Borrow`] returns a reference to an existing object.
+    /// To represent the set of connected outputs in non copy mode we need a reference struct (iterator, etc).
+    pub fn get_layout<'db>(&'db self, output_ids: &LayoutById) -> Option<&'db Layout> {
+        self.layouts.get(output_ids).map(|l| &l.0)
     }
 }

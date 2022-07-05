@@ -102,6 +102,11 @@ impl Backend for XcbBackend {
             }
         }
     }
+
+    fn apply_layout(&mut self, layout: &layout::Layout) -> Result<(), anyhow::Error> {
+        todo!();
+        Ok(())
+    }
 }
 
 fn check_randr_event(event: xcb::Event) -> bool {

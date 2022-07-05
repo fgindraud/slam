@@ -17,6 +17,9 @@ pub trait Backend {
     /// Error should represent a *hard unrecoverable* error like X server connection failure.
     /// All other errors should be logged and recovered from if possible.
     fn wait_for_change(&mut self, reaction_delay: Option<Duration>) -> Result<(), anyhow::Error>;
+
+    /// Apply layout to the system using the backend.
+    fn apply_layout(&mut self, layout: &layout::Layout) -> Result<(), anyhow::Error>;
 }
 
 /// X backend
@@ -38,19 +41,30 @@ pub fn run_daemon(
         } = backend.current_layout();
         // Select behavior
         if !unsupported_causes.is_empty() {
-            log::warn!("unsupported layout ({:?}), ignored", unsupported_causes)
+            log::warn!("unsupported layout ({:?}), ignored", unsupported_causes);
+            layout = new_layout
         } else if new_layout == layout {
             // if layout is the same as last seen or requested : ignore
             log::debug!("layout unchanged, ignored")
         } else if Iterator::eq(new_layout.connected_outputs(), layout.connected_outputs()) {
             // same outputs but changes : store to db
             log::info!("layout updated by user, storing to database");
-            database.store(new_layout.clone())?
+            database.store_layout(new_layout.clone())?;
+            layout = new_layout
         } else {
-            // if new output set : apply from DB, or autolayout a new one
-            // TODO
-            // store requested layout in `layout` var
+            // new output set
+            let by_id = database::LayoutById(new_layout);
+            if let Some(stored_layout) = database.get_layout(&by_id) {
+                // apply
+                log::info!("apply layout from database");
+                backend.apply_layout(stored_layout)?;
+                layout = stored_layout.clone()
+            } else {
+                // autolayout
+                log::info!("use auto-generated layout (not functionnal)");
+                let database::LayoutById(new_layout) = by_id;
+                todo!()
+            }
         }
-        layout = new_layout;
     }
 }

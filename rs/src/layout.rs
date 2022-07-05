@@ -71,6 +71,23 @@ pub enum OutputState {
     },
 }
 
+impl OutputState {
+    /// Rect occupied by monitor in abstract 2D space (X11 screen)
+    fn rect(&self) -> Option<Rect> {
+        match self {
+            Self::Disabled => None,
+            Self::Enabled {
+                bottom_left,
+                mode,
+                transform,
+            } => Some(Rect {
+                bottom_left: bottom_left.clone(),
+                size: mode.size.clone().apply(transform),
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct OutputEntry {
     pub id: OutputId,
@@ -92,6 +109,17 @@ pub struct Layout {
     primary: Option<OutputId>,
 }
 
+impl Layout {
+    /// Return the list of outputs ids, sorted.
+    pub fn connected_outputs<'l>(
+        &'l self,
+    ) -> impl Iterator<Item = &'l OutputId> + ExactSizeIterator + DoubleEndedIterator {
+        self.outputs.iter().map(|o| &o.id)
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 bitflags::bitflags! {
     pub struct UnsupportedCauses: u8 {
         /// Some output rects overlap
@@ -103,37 +131,13 @@ bitflags::bitflags! {
     }
 }
 
+/// Result of trying to validate layout output entries.
+/// We need both the layout info and the error status, thus the choice of struct instead of [`Result`].
 #[derive(Debug)]
 pub struct LayoutInfo {
     pub layout: Layout,
     pub unsupported_causes: UnsupportedCauses,
     // TODO it would be useful to store data for statistical mode, with output names
-}
-
-impl OutputState {
-    /// Rect occupied by monitor in abstract 2D space (X11 screen)
-    fn rect(&self) -> Option<Rect> {
-        match self {
-            Self::Disabled => None,
-            Self::Enabled {
-                bottom_left,
-                mode,
-                transform,
-            } => Some(Rect {
-                bottom_left: bottom_left.clone(),
-                size: mode.size.clone().apply(transform),
-            }),
-        }
-    }
-}
-
-impl Layout {
-    /// Return the list of outputs ids, sorted.
-    pub fn connected_outputs<'l>(
-        &'l self,
-    ) -> impl Iterator<Item = &'l OutputId> + ExactSizeIterator + DoubleEndedIterator {
-        self.outputs.iter().map(|o| &o.id)
-    }
 }
 
 impl LayoutInfo {
@@ -160,7 +164,7 @@ impl LayoutInfo {
     }
 }
 
-/// Validate and normalize layout contents
+/// Validate and normalize layout contents in deserialization case.
 fn deserialize_layout_entries<'de, D>(deserializer: D) -> Result<Box<[OutputEntry]>, D::Error>
 where
     D: serde::Deserializer<'de>,
