@@ -29,12 +29,11 @@ Semantics
 ---------
 
 When the backend layout changes :
-* If the current setting is _unsupported_ (overlapping / clone outputs, maybe check for CRTC transform, etc) : do nothing. Also called _manual layout mode_.
 * If the layout is what was just requested to be set: do nothing (we see our own update).
 * If the set of physical outputs is different from before (add / remove screen) :
     * If a database entry exists for this set of outputs, use the stored layout.
     * If no database entry, this is a new situation: create a layout enabling the new screen(s) with a default position.
-* If same set of outputs, this is a change to software layout: store it.
+* If same set of outputs, this is a change to software layout: store it unless it is _unsupported_ (overlapping / clone outputs, maybe check for CRTC transform, etc)
 
 Thus with this set of semantics the stored layouts can be set by using any other tool to change the current layout : `xrandr`, `arandr`, GUIs.
 The change from this external tool will be recognized as a _software_ change and be stored, eliminating the need to configure it from _SLAM_ itself.

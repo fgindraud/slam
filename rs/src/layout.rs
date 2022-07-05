@@ -86,6 +86,13 @@ impl OutputState {
             }),
         }
     }
+
+    fn is_enabled(&self) -> bool {
+        match self {
+            Self::Enabled { .. } => true,
+            Self::Disabled => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
@@ -97,13 +104,16 @@ pub struct OutputEntry {
 /// State of a set of screen outputs and their positionning.
 /// Intended to be stored in the database.
 /// Lists all connected outputs of a system.
-/// Positions are defined by coordinates of the bottom left corner, starting at (0,0).
+/// Positions are defined by coordinates of the bottom left corner, starting at `(0,0)`.
+///
+/// It is allowed to have multiple identical [`Edid`] if an output is connected by multiple means.
+/// However it must only be enabled once, or the layout is unsupported.
+/// Backend will expect an Edid to only be enabled once.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Layout {
     /// Sorted by [`OutputId`].
     #[serde(deserialize_with = "deserialize_layout_entries")]
     outputs: Box<[OutputEntry]>,
-    // TODO special deserialize with validation ?
     /// Primary output if used / supported. Not in Wayland apparently.
     /// Used by some window manager to choose where to place tray icons, etc.
     primary: Option<OutputId>,
@@ -128,6 +138,8 @@ bitflags::bitflags! {
         const GAPS = 0b00000010;
         /// Using clone mode
         const CLONES = 0b00000100;
+        /// Output [`Edid`] enabled more than once
+        const DUPLICATED_ENABLED_EDID = 0b00001000;
     }
 }
 
@@ -145,7 +157,7 @@ impl LayoutInfo {
     pub fn from(mut outputs: Vec<OutputEntry>, primary: Option<OutputId>) -> LayoutInfo {
         outputs.sort();
         normalize_bottom_left_coordinates(&mut outputs);
-        let unsupported_causes = check_for_overlap_and_gaps(&outputs);
+        let unsupported_causes = check_entries_for_unsupported_causes(&outputs);
         let layout = Layout {
             outputs: Vec::into_boxed_slice(outputs),
             primary,
@@ -172,7 +184,7 @@ where
     let mut entries: Box<[OutputEntry]> = serde::Deserialize::deserialize(deserializer)?;
     entries.sort();
     normalize_bottom_left_coordinates(&mut entries);
-    let unsupported = check_for_overlap_and_gaps(&entries);
+    let unsupported = check_entries_for_unsupported_causes(&entries);
     if unsupported != UnsupportedCauses::empty() {
         use serde::de::Error;
         Err(D::Error::custom(format!(
@@ -199,9 +211,12 @@ fn normalize_bottom_left_coordinates(outputs: &mut [OutputEntry]) {
     }
 }
 
-/// Check gaps and overlaps between enabled outputs rects
-fn check_for_overlap_and_gaps(outputs: &[OutputEntry]) -> UnsupportedCauses {
+/// Check output entries for problems:
+/// - gaps and overlaps between enabled outputs rects
+fn check_entries_for_unsupported_causes(outputs: &[OutputEntry]) -> UnsupportedCauses {
     let mut unsupported_causes = UnsupportedCauses::empty();
+
+    // Coordinate problems : gaps, overlap
     let rects = Vec::from_iter(outputs.iter().filter_map(|o| o.state.rect()));
     let size = rects.len();
     let mut relations = RelationMatrix::new(size);
@@ -218,5 +233,29 @@ fn check_for_overlap_and_gaps(outputs: &[OutputEntry]) -> UnsupportedCauses {
     if !relations.is_single_connected_component() {
         unsupported_causes |= UnsupportedCauses::GAPS
     }
+
+    // Duplicate enabled EDID
+    let mut entries = outputs.into_iter();
+    if let Some(first_entry) = entries.next() {
+        let mut prev_id = &first_entry.id;
+        let mut any_enabled_entry_with_prev_id = first_entry.state.is_enabled();
+
+        for entry in entries {
+            let enabled = entry.state.is_enabled();
+            if &entry.id == prev_id {
+                // Fail if id is enabled twice or more
+                if any_enabled_entry_with_prev_id && enabled {
+                    unsupported_causes |= UnsupportedCauses::DUPLICATED_ENABLED_EDID;
+                    break;
+                }
+                any_enabled_entry_with_prev_id = any_enabled_entry_with_prev_id || enabled
+            } else {
+                // New id, just track new group
+                prev_id = &entry.id;
+                any_enabled_entry_with_prev_id = enabled;
+            }
+        }
+    }
+
     unsupported_causes
 }

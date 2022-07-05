@@ -40,16 +40,17 @@ pub fn run_daemon(
             unsupported_causes,
         } = backend.current_layout();
         // Select behavior
-        if !unsupported_causes.is_empty() {
-            log::warn!("unsupported layout ({:?}), ignored", unsupported_causes);
-            layout = new_layout
-        } else if new_layout == layout {
+        if new_layout == layout {
             // if layout is the same as last seen or requested : ignore
             log::debug!("layout unchanged, ignored")
         } else if Iterator::eq(new_layout.connected_outputs(), layout.connected_outputs()) {
-            // same outputs but changes : store to db
-            log::info!("layout updated by user, storing to database");
-            database.store_layout(new_layout.clone())?;
+            // same outputs but changes : store to db if supported
+            if unsupported_causes.is_empty() {
+                log::info!("layout changed: storing to database");
+                database.store_layout(new_layout.clone())?;
+            } else {
+                log::warn!("layout changed: ignored because unsupported: {:?}", unsupported_causes);
+            }
             layout = new_layout
         } else {
             // new output set
