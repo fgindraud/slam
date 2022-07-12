@@ -63,12 +63,12 @@ pub enum OutputId {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum OutputState {
-    Disabled,
     Enabled {
         mode: Mode,
         transform: Transform,
         bottom_left: Vec2di,
     },
+    Disabled,
 }
 
 impl OutputState {
@@ -126,6 +126,48 @@ impl Layout {
     ) -> impl Iterator<Item = &'l OutputId> + ExactSizeIterator + DoubleEndedIterator {
         self.outputs.iter().map(|o| &o.id)
     }
+
+    /// Returns sorted entries.
+    pub fn output_entries<'l>(&'l self) -> &'l [OutputEntry] {
+        &self.outputs
+    }
+}
+
+#[test]
+fn test_layout_entry_ordering() {
+    let edid = OutputId::Edid(Edid(0));
+    let name = OutputId::Name("".into());
+    assert!(edid < name);
+
+    let enabled = OutputState::Enabled {
+        mode: Mode {
+            size: Vec2di::default(),
+            frequency: 0,
+        },
+        transform: Transform::default(),
+        bottom_left: Vec2di::default(),
+    };
+    let disabled = OutputState::Disabled;
+    assert!(enabled < disabled);
+
+    assert!(
+        OutputEntry {
+            id: edid.clone(),
+            state: disabled.clone()
+        } < OutputEntry {
+            id: name.clone(),
+            state: enabled.clone()
+        }
+    );
+    assert!(
+        OutputEntry {
+            id: edid.clone(),
+            state: enabled.clone()
+        } < OutputEntry {
+            id: edid.clone(),
+            state: disabled.clone()
+        }
+    )
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -154,6 +196,9 @@ pub struct LayoutInfo {
 
 impl LayoutInfo {
     /// primary is supposed to point to a connected and enabled output (not checked)
+    /// A layout will always be returned even if unsupported :
+    /// - this is needed to recognize changes later on
+    /// - it should not be stored in the database
     pub fn from(mut outputs: Vec<OutputEntry>, primary: Option<OutputId>) -> LayoutInfo {
         outputs.sort();
         normalize_bottom_left_coordinates(&mut outputs);

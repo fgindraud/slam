@@ -1,6 +1,7 @@
 use crate::geometry::{Rotation, Transform, Vec2di};
 use crate::layout::{self, Edid};
 use crate::Backend;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::Duration;
 use xcb::Xid;
@@ -126,8 +127,16 @@ struct OutputSetState {
     ressources: xcb::randr::GetScreenResourcesReply,
     crtcs: HashMap<xcb::randr::Crtc, xcb::randr::GetCrtcInfoReply>,
     outputs: HashMap<xcb::randr::Output, OutputState>,
+    connected_output_mapping: HashMap<layout::OutputId, MatchingOutput>,
     primary: Option<xcb::randr::Output>,
 }
+
+#[derive(Debug)]
+enum MatchingOutput {
+    Single(xcb::randr::Output),
+    Multiple(Vec<xcb::randr::Output>),
+}
+
 #[derive(Debug)]
 struct OutputState {
     info: xcb::randr::GetOutputInfoReply,
@@ -224,16 +233,36 @@ impl OutputSetState {
         let crtc_requests = Vec::from_iter(ressources.crtcs().iter().map(make_crtc_request));
         let output_requests = Vec::from_iter(ressources.outputs().iter().map(make_output_requests));
         let crtcs = Result::from_iter(crtc_requests.into_iter().map(process_crtc_reply))?;
-        let outputs = Result::from_iter(output_requests.into_iter().map(process_output_replies))?;
+        let outputs: HashMap<_, _> =
+            Result::from_iter(output_requests.into_iter().map(process_output_replies))?;
 
         // End with primary request. This is a Xid so filter for nones
         let primary_reply = conn.wait_for_reply(primary_request)?;
+        let primary = filter_xid(primary_reply.output());
+
+        // Pre compute useful mapping from layout::OutputID to xcb id.
+        let mut connected_output_mapping = HashMap::new();
+        for (id, state) in outputs.iter().filter(|(_, s)| s.is_connected()) {
+            let id = id.clone();
+            match connected_output_mapping.entry(state.id()) {
+                Entry::Vacant(v) => {
+                    v.insert(MatchingOutput::Single(id));
+                }
+                Entry::Occupied(mut o) => match o.get_mut() {
+                    MatchingOutput::Single(i) => {
+                        *o.get_mut() = MatchingOutput::Multiple(vec![i.clone(), id])
+                    }
+                    MatchingOutput::Multiple(v) => v.push(id),
+                },
+            }
+        }
 
         Ok(OutputSetState {
             ressources,
             crtcs,
             outputs,
-            primary: filter_xid(primary_reply.output()),
+            connected_output_mapping,
+            primary,
         })
     }
 
@@ -254,15 +283,18 @@ impl OutputState {
             && self.info.modes().len() > 0
             && self.info.crtcs().len() > 0
     }
+
+    fn id(&self) -> layout::OutputId {
+        match self.edid {
+            Some(edid) => layout::OutputId::Edid(edid),
+            None => layout::OutputId::Name(self.name.clone()),
+        }
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
 fn convert_to_layout(output_states: &OutputSetState) -> layout::LayoutInfo {
-    let convert_to_output_id = |state: &OutputState| match state.edid {
-        Some(edid) => layout::OutputId::Edid(edid),
-        None => layout::OutputId::Name(state.name.clone()),
-    };
     // Get output information after checking that it is properly enabled (crtc + mode).
     let convert_output_state = |xcb_state: &OutputState| -> layout::OutputState {
         let assigned_crtc = match output_states.crtcs.get(&xcb_state.info.crtc()) {
@@ -282,14 +314,14 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::LayoutInfo {
     let primary_id = output_states
         .primary
         .and_then(|id| output_states.outputs.get(&id))
-        .map(convert_to_output_id);
+        .map(OutputState::id);
     let mut info = layout::LayoutInfo::from_iter(
         output_states
             .outputs
             .values()
             .filter(|state| state.is_connected())
             .map(|state| layout::OutputEntry {
-                id: convert_to_output_id(state),
+                id: state.id(),
                 state: convert_output_state(state),
             }),
         primary_id,
