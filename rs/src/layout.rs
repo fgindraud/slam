@@ -4,7 +4,11 @@ use crate::relation::RelationMatrix;
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Bytes 8 to 15 of EDID header, containing manufacturer id + serial number.
-/// This should be sufficient for unique identification of a display.
+///
+/// From experiments, at least Dell uses different EDID for various inputs of the same monitor.
+/// Thus is is assumed that EDID are unique and never seen duplicated.
+/// Allowing duplication of EDIDs would add lots of complexity.
+/// This should be sufficient for unique identification of a display + input port.
 #[derive(
     Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -51,6 +55,12 @@ pub struct Mode {
 impl Mode {
     pub fn score(&self) -> u64 {
         u64::from(self.size.x) * u64::from(self.size.y) * u64::from(self.frequency)
+    }
+}
+
+impl std::fmt::Display for Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}x{}x{}Hz", self.size.x, self.size.y, self.frequency)
     }
 }
 
@@ -112,10 +122,6 @@ pub struct OutputEntry {
 /// Intended to be stored in the database.
 /// Lists all connected outputs of a system.
 /// Positions are defined by coordinates of the bottom left corner, starting at `(0,0)`.
-///
-/// It is allowed to have multiple identical [`Edid`] if an output is connected by multiple means.
-/// However it must only be enabled once, or the layout is unsupported.
-/// Backend will expect an Edid to only be enabled once.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Layout {
     /// Sorted by [`OutputId`].
@@ -187,8 +193,8 @@ bitflags::bitflags! {
         const GAPS = 0b00000010;
         /// Using clone mode
         const CLONES = 0b00000100;
-        /// Output [`Edid`] enabled more than once
-        const DUPLICATED_ENABLED_EDID = 0b00001000;
+        /// [`Edid`] present more than once
+        const DUPLICATE_EDID = 0b00001000;
     }
 }
 
@@ -265,6 +271,7 @@ fn normalize_bottom_left_coordinates(outputs: &mut [OutputEntry]) {
 
 /// Check output entries for problems:
 /// - gaps and overlaps between enabled outputs rects
+/// - EDID present more than once
 fn check_entries_for_unsupported_causes(outputs: &[OutputEntry]) -> UnsupportedCauses {
     let mut unsupported_causes = UnsupportedCauses::empty();
 
@@ -286,26 +293,16 @@ fn check_entries_for_unsupported_causes(outputs: &[OutputEntry]) -> UnsupportedC
         unsupported_causes |= UnsupportedCauses::GAPS
     }
 
-    // Duplicate enabled EDID
+    // Duplicate EDID
     let mut entries = outputs.into_iter();
     if let Some(first_entry) = entries.next() {
         let mut prev_id = &first_entry.id;
-        let mut any_enabled_entry_with_prev_id = first_entry.state.is_enabled();
-
         for entry in entries {
-            let enabled = entry.state.is_enabled();
             if &entry.id == prev_id {
-                // Fail if id is enabled twice or more
-                if any_enabled_entry_with_prev_id && enabled {
-                    unsupported_causes |= UnsupportedCauses::DUPLICATED_ENABLED_EDID;
-                    break;
-                }
-                any_enabled_entry_with_prev_id = any_enabled_entry_with_prev_id || enabled
-            } else {
-                // New id, just track new group
-                prev_id = &entry.id;
-                any_enabled_entry_with_prev_id = enabled;
+                unsupported_causes |= UnsupportedCauses::DUPLICATE_EDID;
+                break;
             }
+            prev_id = &entry.id;
         }
     }
 
