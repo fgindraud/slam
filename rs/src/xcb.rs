@@ -1,7 +1,6 @@
 use crate::geometry::{Rotation, Transform, Vec2d};
 use crate::layout::{self, Edid};
 use crate::Backend;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::Duration;
 use xcb::Xid;
@@ -105,7 +104,9 @@ impl Backend for XcbBackend {
     }
 
     fn apply_layout(&mut self, layout: &layout::Layout) -> Result<(), anyhow::Error> {
-        todo!();
+        let enabled_configs =
+            compute_enabled_output_configs(layout.output_entries(), &self.output_set_state);
+        dbg!(enabled_configs);
         Ok(())
     }
 }
@@ -128,14 +129,8 @@ struct OutputSetState {
     mode_by_id: HashMap<u32, layout::Mode>,
     crtcs: HashMap<xcb::randr::Crtc, xcb::randr::GetCrtcInfoReply>,
     outputs: HashMap<xcb::randr::Output, OutputState>,
-    connected_output_mapping: HashMap<layout::OutputId, MatchingOutput>,
+    connected_output_mapping: HashMap<layout::OutputId, xcb::randr::Output>,
     primary: Option<xcb::randr::Output>,
-}
-
-#[derive(Debug)]
-enum MatchingOutput {
-    Single(xcb::randr::Output),
-    Multiple(Vec<xcb::randr::Output>),
 }
 
 #[derive(Debug)]
@@ -241,23 +236,6 @@ impl OutputSetState {
         let primary_reply = conn.wait_for_reply(primary_request)?;
         let primary = filter_xid(primary_reply.output());
 
-        // Pre compute useful mapping from layout::OutputID to xcb id.
-        let mut connected_output_mapping = HashMap::new();
-        for (id, state) in outputs.iter().filter(|(_, s)| s.is_connected()) {
-            let id = id.clone();
-            match connected_output_mapping.entry(state.id()) {
-                Entry::Vacant(v) => {
-                    v.insert(MatchingOutput::Single(id));
-                }
-                Entry::Occupied(mut o) => match o.get_mut() {
-                    MatchingOutput::Single(i) => {
-                        *o.get_mut() = MatchingOutput::Multiple(vec![i.clone(), id])
-                    }
-                    MatchingOutput::Multiple(v) => v.push(id),
-                },
-            }
-        }
-
         Ok(OutputSetState {
             mode_by_id: HashMap::from_iter(
                 ressources
@@ -265,10 +243,12 @@ impl OutputSetState {
                     .into_iter()
                     .map(|m| (m.id, layout::Mode::from(m))),
             ),
+            connected_output_mapping: HashMap::from_iter(
+                outputs.iter().map(|(id, state)| (state.id(), id.clone())),
+            ),
             ressources,
             crtcs,
             outputs,
-            connected_output_mapping,
             primary,
         })
     }
@@ -338,6 +318,65 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::LayoutInfo {
         info.unsupported_causes |= layout::UnsupportedCauses::CLONES;
     }
     info
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug, Clone)]
+struct EnabledOutputConfiguration {
+    bottom_left: Vec2d<i32>,
+    mode: xcb::randr::Mode,
+    rotation: xcb::randr::Rotation,
+}
+
+fn compute_enabled_output_configs(
+    entries: &[layout::OutputEntry],
+    state: &OutputSetState,
+) -> Result<HashMap<xcb::randr::Output, EnabledOutputConfiguration>, String> {
+    let scan_mode_list = |list: &[xcb::randr::Mode], requested_mode: &layout::Mode| {
+        list.into_iter()
+            .find(|id| requested_mode == &state.mode_by_id[&id.resource_id()])
+            .cloned()
+    };
+
+    entries
+        .into_iter()
+        .filter_map(|entry| match &entry.state {
+            layout::OutputState::Disabled => None,
+            layout::OutputState::Enabled {
+                mode: requested_mode,
+                transform,
+                bottom_left,
+            } => {
+                let output_id = &state.connected_output_mapping[&entry.id];
+                let output = &state.outputs[output_id];
+                let requested_mode_id = match scan_mode_list(output.info.modes(), requested_mode) {
+                    Some(id) => id,
+                    None => {
+                        return Some(Err(format!(
+                            "no mode matching {} found in output {}",
+                            requested_mode, output.name
+                        )))
+                    }
+                };
+                Some(Ok((
+                    output_id.clone(),
+                    EnabledOutputConfiguration {
+                        bottom_left: bottom_left.clone(),
+                        mode: requested_mode_id,
+                        rotation: transform.into(),
+                    },
+                )))
+            }
+        })
+        .collect()
+}
+
+fn choose_crtc_allocation(
+    state: &OutputSetState,
+) -> HashMap<xcb::randr::Crtc, Option<xcb::randr::Output>> {
+    let mut output_by_crtc = HashMap::from_iter(state.crtcs.keys().map(|k| (k.clone(), None)));
+    output_by_crtc
 }
 
 ///////////////////////////////////////////////////////////////////////////////

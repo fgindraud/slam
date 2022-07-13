@@ -52,12 +52,6 @@ pub struct Mode {
     pub frequency: u32,
 }
 
-impl Mode {
-    pub fn score(&self) -> u64 {
-        u64::from(self.size.x) * u64::from(self.size.y) * u64::from(self.frequency)
-    }
-}
-
 impl std::fmt::Display for Mode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}x{}x{}Hz", self.size.x, self.size.y, self.frequency)
@@ -102,13 +96,6 @@ impl OutputState {
             }),
         }
     }
-
-    fn is_enabled(&self) -> bool {
-        match self {
-            Self::Enabled { .. } => true,
-            Self::Disabled => false,
-        }
-    }
 }
 
 /// [`Ord`] : by id then state.
@@ -144,43 +131,6 @@ impl Layout {
     pub fn output_entries<'l>(&'l self) -> &'l [OutputEntry] {
         &self.outputs
     }
-}
-
-#[test]
-fn test_layout_entry_ordering() {
-    let edid = OutputId::Edid(Edid(0));
-    let name = OutputId::Name("".into());
-    assert!(edid < name);
-
-    let enabled = OutputState::Enabled {
-        mode: Mode {
-            size: Vec2d::default(),
-            frequency: 0,
-        },
-        transform: Transform::default(),
-        bottom_left: Vec2d::default(),
-    };
-    let disabled = OutputState::Disabled;
-    assert!(enabled < disabled);
-
-    assert!(
-        OutputEntry {
-            id: edid.clone(),
-            state: disabled.clone()
-        } < OutputEntry {
-            id: name.clone(),
-            state: enabled.clone()
-        }
-    );
-    assert!(
-        OutputEntry {
-            id: edid.clone(),
-            state: enabled.clone()
-        } < OutputEntry {
-            id: edid.clone(),
-            state: disabled.clone()
-        }
-    )
 }
 
 ///////////////////////////////////////////////////////////////////////////////
