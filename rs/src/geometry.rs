@@ -131,12 +131,11 @@ impl InvertibleRelation for Direction {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-/// Pair of integer, used as coordinates / size. Uses the usual cartesian orientation :
+/// Generic pair type.
+///
+/// With integers, used as coordinates / size. Uses the usual cartesian orientation :
 /// - `x` goes from right to left.
 /// - `y` goes upward.
-pub type Vec2di = Vec2d<i32>;
-
-/// Generic pair type. Specialised for coordinates as [`Vec2di`].
 #[derive(
     Debug,
     Default,
@@ -165,13 +164,11 @@ impl<T> Vec2d<T> {
             true => Vec2d::new(self.y, self.x),
         }
     }
-}
 
-impl<T> From<(T, T)> for Vec2d<T> {
-    fn from(pair: (T, T)) -> Self {
+    pub fn map<U, F: Fn(T) -> U>(self, f: F) -> Vec2d<U> {
         Vec2d {
-            x: pair.0,
-            y: pair.1,
+            x: f(self.x),
+            y: f(self.y),
         }
     }
 }
@@ -227,35 +224,35 @@ impl<T: Ord> Vec2d<T> {
 /// Top and right sides are excluded.
 #[derive(Debug, Clone)]
 pub struct Rect {
-    pub bottom_left: Vec2di,
-    pub size: Vec2di,
+    pub bottom_left: Vec2d<i32>,
+    pub size: Vec2d<u32>,
 }
 
 impl Rect {
-    pub fn top_right(&self) -> Vec2di {
-        self.bottom_left + self.size
+    pub fn top_right(&self) -> Vec2d<i32> {
+        self.bottom_left + Vec2d::new(self.size.x as i32, self.size.y as i32)
     }
-    fn bottom_right(&self) -> Vec2di {
-        self.bottom_left + Vec2di::new(self.size.x, 0)
+    fn bottom_right(&self) -> Vec2d<i32> {
+        self.bottom_left + Vec2d::new(self.size.x as i32, 0)
     }
-    fn top_left(&self) -> Vec2di {
-        self.bottom_left + Vec2di::new(0, self.size.y)
-    }
-
-    fn center_bottom(&self) -> Vec2di {
-        self.bottom_left + Vec2di::new(self.size.x / 2, 0)
-    }
-    fn center_top(&self) -> Vec2di {
-        self.bottom_left + Vec2di::new(self.size.x / 2, self.size.y)
-    }
-    fn center_left(&self) -> Vec2di {
-        self.bottom_left + Vec2di::new(0, self.size.y / 2)
-    }
-    fn center_right(&self) -> Vec2di {
-        self.bottom_left + Vec2di::new(self.size.x, self.size.y / 2)
+    fn top_left(&self) -> Vec2d<i32> {
+        self.bottom_left + Vec2d::new(0, self.size.y as i32)
     }
 
-    fn offset(&self, delta: Vec2di) -> Rect {
+    fn center_bottom(&self) -> Vec2d<i32> {
+        self.bottom_left + Vec2d::new((self.size.x / 2) as i32, 0)
+    }
+    fn center_top(&self) -> Vec2d<i32> {
+        self.bottom_left + Vec2d::new((self.size.x / 2) as i32, self.size.y as i32)
+    }
+    fn center_left(&self) -> Vec2d<i32> {
+        self.bottom_left + Vec2d::new(0, (self.size.y / 2) as i32)
+    }
+    fn center_right(&self) -> Vec2d<i32> {
+        self.bottom_left + Vec2d::new(self.size.x as i32, (self.size.y / 2) as i32)
+    }
+
+    fn offset(&self, delta: Vec2d<i32>) -> Rect {
         Rect {
             bottom_left: self.bottom_left + delta,
             size: self.size,
@@ -277,11 +274,11 @@ impl Rect {
     /// Current criterion : adjacent == touching on one side with an overlap at least half the size of the smallest rect.
     pub fn adjacent_direction(&self, rhs: &Rect) -> Option<Direction> {
         let lhs = self;
-        let size_max = Vec2di::cwise_max(lhs.size, rhs.size);
+        let size_max = Vec2d::cwise_max(lhs.size, rhs.size);
         let is_adjacent_x =
-            |l: Vec2di, r: Vec2di| l.x == r.x && 2 * (l.y - r.y).abs() <= size_max.y;
+            |l: Vec2d<i32>, r: Vec2d<i32>| l.x == r.x && 2 * (l.y - r.y).abs() as u32 <= size_max.y;
         let is_adjacent_y =
-            |l: Vec2di, r: Vec2di| l.y == r.y && 2 * (l.x - r.x).abs() <= size_max.x;
+            |l: Vec2d<i32>, r: Vec2d<i32>| l.y == r.y && 2 * (l.x - r.x).abs() as u32 <= size_max.x;
         if is_adjacent_x(lhs.center_right(), rhs.center_left()) {
             return Some(Direction::LeftOf);
         }
@@ -302,35 +299,35 @@ impl Rect {
 #[test]
 fn test_overlaps() {
     let main = Rect {
-        bottom_left: Vec2di::new(0, 0),
-        size: Vec2di::new(1920, 1080),
+        bottom_left: Vec2d::new(0, 0),
+        size: Vec2d::new(1920, 1080),
     };
     // Adjacent
-    assert!(!main.overlaps(&main.offset((1920, 0).into())));
-    assert!(!main.overlaps(&main.offset((-1920, 0).into())));
-    assert!(!main.overlaps(&main.offset((0, 1080).into())));
-    assert!(!main.overlaps(&main.offset((0, -1080).into())));
+    assert!(!main.overlaps(&main.offset(Vec2d::new(1920, 0))));
+    assert!(!main.overlaps(&main.offset(Vec2d::new(-1920, 0))));
+    assert!(!main.overlaps(&main.offset(Vec2d::new(0, 1080))));
+    assert!(!main.overlaps(&main.offset(Vec2d::new(0, -1080))));
     // Adjacent to corners
-    assert!(!main.overlaps(&main.offset((1920, 600).into())));
-    assert!(!main.overlaps(&main.offset((1920, 1080).into())));
+    assert!(!main.overlaps(&main.offset(Vec2d::new(1920, 600))));
+    assert!(!main.overlaps(&main.offset(Vec2d::new(1920, 1080))));
     // With gap
-    assert!(!main.overlaps(&main.offset((-2000, 0).into())));
-    assert!(!main.overlaps(&main.offset((2000, 0).into())));
-    assert!(!main.overlaps(&main.offset((0, 1500).into())));
+    assert!(!main.overlaps(&main.offset(Vec2d::new(-2000, 0))));
+    assert!(!main.overlaps(&main.offset(Vec2d::new(2000, 0))));
+    assert!(!main.overlaps(&main.offset(Vec2d::new(0, 1500))));
     // Should overlap
-    assert!(main.overlaps(&main.offset((1919, 0).into())));
-    assert!(main.overlaps(&main.offset((-1919, 0).into())));
-    assert!(main.overlaps(&main.offset((200, 0).into())));
-    assert!(main.overlaps(&main.offset((0, 1079).into())));
+    assert!(main.overlaps(&main.offset(Vec2d::new(1919, 0))));
+    assert!(main.overlaps(&main.offset(Vec2d::new(-1919, 0))));
+    assert!(main.overlaps(&main.offset(Vec2d::new(200, 0))));
+    assert!(main.overlaps(&main.offset(Vec2d::new(0, 1079))));
     assert!(main.overlaps(&main))
 }
 
 #[cfg(test)]
 #[test]
 fn test_direction() {
-    let size = Vec2di::new(1920, 1080);
+    let size = Vec2d::new(1920, 1080);
     let primary = Rect {
-        bottom_left: Vec2di::new(0, 0),
+        bottom_left: Vec2d::new(0, 0),
         size,
     };
     let at_right = Rect {
@@ -338,7 +335,7 @@ fn test_direction() {
         size,
     };
     let right_overlap = Rect {
-        bottom_left: primary.bottom_right() + Vec2di::new(1, 0),
+        bottom_left: primary.bottom_right() + Vec2d::new(1, 0),
         size,
     };
     let above_middle = Rect {
@@ -346,7 +343,7 @@ fn test_direction() {
         size,
     };
     let smaller_below = Rect {
-        bottom_left: primary.center_bottom() + Vec2di::new(200, -480),
+        bottom_left: primary.center_bottom() + Vec2d::new(200, -480),
         size: Vec2d::new(640, 480),
     };
     assert_eq!(Rect::adjacent_direction(&primary, &primary), None);

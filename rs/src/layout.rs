@@ -1,4 +1,4 @@
-use crate::geometry::{Rect, Transform, Vec2di};
+use crate::geometry::{Rect, Transform, Vec2d};
 use crate::relation::RelationMatrix;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -44,8 +44,14 @@ impl From<u64> for Edid {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct Mode {
-    pub size: Vec2di,
+    pub size: Vec2d<u32>,
     pub frequency: u32,
+}
+
+impl Mode {
+    pub fn score(&self) -> u64 {
+        u64::from(self.size.x) * u64::from(self.size.y) * u64::from(self.frequency)
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -66,7 +72,7 @@ pub enum OutputState {
     Enabled {
         mode: Mode,
         transform: Transform,
-        bottom_left: Vec2di,
+        bottom_left: Vec2d<i32>,
     },
     Disabled,
 }
@@ -95,6 +101,7 @@ impl OutputState {
     }
 }
 
+/// [`Ord`] : by id then state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct OutputEntry {
     pub id: OutputId,
@@ -141,11 +148,11 @@ fn test_layout_entry_ordering() {
 
     let enabled = OutputState::Enabled {
         mode: Mode {
-            size: Vec2di::default(),
+            size: Vec2d::default(),
             frequency: 0,
         },
         transform: Transform::default(),
-        bottom_left: Vec2di::default(),
+        bottom_left: Vec2d::default(),
     };
     let disabled = OutputState::Disabled;
     assert!(enabled < disabled);
@@ -245,8 +252,8 @@ where
 fn normalize_bottom_left_coordinates(outputs: &mut [OutputEntry]) {
     let min_coords = outputs
         .iter()
-        .fold(Vec2di::default(), |min, output| match &output.state {
-            OutputState::Enabled { bottom_left, .. } => Vec2di::cwise_min(min, bottom_left.clone()),
+        .fold(Vec2d::default(), |min, output| match &output.state {
+            OutputState::Enabled { bottom_left, .. } => Vec2d::cwise_min(min, bottom_left.clone()),
             OutputState::Disabled => min,
         });
     for output in outputs {

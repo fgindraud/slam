@@ -1,4 +1,4 @@
-use crate::geometry::{Rotation, Transform, Vec2di};
+use crate::geometry::{Rotation, Transform, Vec2d};
 use crate::layout::{self, Edid};
 use crate::Backend;
 use std::collections::hash_map::Entry;
@@ -125,6 +125,7 @@ fn check_randr_event(event: xcb::Event) -> bool {
 #[derive(Debug)]
 struct OutputSetState {
     ressources: xcb::randr::GetScreenResourcesReply,
+    mode_by_id: HashMap<u32, layout::Mode>,
     crtcs: HashMap<xcb::randr::Crtc, xcb::randr::GetCrtcInfoReply>,
     outputs: HashMap<xcb::randr::Output, OutputState>,
     connected_output_mapping: HashMap<layout::OutputId, MatchingOutput>,
@@ -258,6 +259,12 @@ impl OutputSetState {
         }
 
         Ok(OutputSetState {
+            mode_by_id: HashMap::from_iter(
+                ressources
+                    .modes()
+                    .into_iter()
+                    .map(|m| (m.id, layout::Mode::from(m))),
+            ),
             ressources,
             crtcs,
             outputs,
@@ -266,13 +273,9 @@ impl OutputSetState {
         })
     }
 
-    fn mode_from_id(&self, id: xcb::randr::Mode) -> Option<layout::Mode> {
+    fn get_mode(&self, id: xcb::randr::Mode) -> Option<&layout::Mode> {
         let id = filter_xid(id)?;
-        self.ressources
-            .modes()
-            .into_iter()
-            .find(|m| m.id == id.resource_id())
-            .map(|m| layout::Mode::from(m))
+        self.mode_by_id.get(&id.resource_id())
     }
 }
 
@@ -301,14 +304,14 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::LayoutInfo {
             Some(crtc) => crtc,
             None => return layout::OutputState::Disabled,
         };
-        let valid_mode = match output_states.mode_from_id(assigned_crtc.mode()) {
-            Some(mode) => mode,
+        let valid_mode = match output_states.get_mode(assigned_crtc.mode()) {
+            Some(mode) => mode.clone(),
             None => return layout::OutputState::Disabled,
         };
         layout::OutputState::Enabled {
             mode: valid_mode,
             transform: Transform::from(assigned_crtc.rotation()),
-            bottom_left: Vec2di::new(assigned_crtc.x().into(), assigned_crtc.y().into()),
+            bottom_left: Vec2d::new(assigned_crtc.x().into(), assigned_crtc.y().into()),
         }
     };
     let primary_id = output_states
@@ -366,8 +369,8 @@ impl From<xcb::randr::Rotation> for Transform {
     }
 }
 
-impl From<Transform> for xcb::randr::Rotation {
-    fn from(t: Transform) -> xcb::randr::Rotation {
+impl From<&'_ Transform> for xcb::randr::Rotation {
+    fn from(t: &'_ Transform) -> xcb::randr::Rotation {
         // The definition of xcb's transform has the same order as ours (reflect then rotation).
         // So we just need to translate the flags.
         use xcb::randr::Rotation as XcbT;
@@ -387,7 +390,7 @@ impl From<Transform> for xcb::randr::Rotation {
 
 impl From<&'_ xcb::randr::ModeInfo> for layout::Mode {
     fn from(xcb_mode: &'_ xcb::randr::ModeInfo) -> layout::Mode {
-        let size = Vec2di::new(xcb_mode.width.into(), xcb_mode.height.into());
+        let size = Vec2d::new(xcb_mode.width.into(), xcb_mode.height.into());
         let dots = u32::from(xcb_mode.htotal) * u32::from(xcb_mode.vtotal);
         assert_ne!(dots, 0, "invalid xcb::ModeInfo");
         let frequency = div_round(xcb_mode.dot_clock, dots);

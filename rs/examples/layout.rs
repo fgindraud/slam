@@ -1,6 +1,6 @@
 #![allow(dead_code)] // Testing only part of the code.
 
-use slam::geometry::{Rect, Vec2di};
+use slam::geometry::{Rect, Vec2d};
 
 // Palette with evenly distributed hues
 fn color_palette(n: usize) -> impl Iterator<Item = tiny_skia::Color> {
@@ -18,38 +18,35 @@ fn color_palette(n: usize) -> impl Iterator<Item = tiny_skia::Color> {
 
 fn boundary_rect(rects: &[Rect]) -> Rect {
     assert!(!rects.is_empty());
-    let bottom_left = Vec2di {
+    let bottom_left = Vec2d {
         x: rects.iter().map(|r| r.bottom_left.x).min().unwrap(),
         y: rects.iter().map(|r| r.bottom_left.y).min().unwrap(),
     };
-    let top_right = Vec2di {
+    let top_right = Vec2d {
         x: rects.iter().map(|r| r.top_right().x).max().unwrap(),
         y: rects.iter().map(|r| r.top_right().y).max().unwrap(),
     };
     Rect {
         bottom_left,
-        size: top_right - bottom_left,
+        size: (top_right - bottom_left).map(|i| i as u32),
     }
 }
 
 fn draw_layout(png_path: &std::path::Path, rects: &[Rect]) {
-    // Conversion utils
-    let tu32 = |i: i32| u32::try_from(i).unwrap();
-    let tf32 = |i: i32| f32::from(i16::try_from(i).unwrap());
     // rects coordinates are arbitray, find enclosing rect where drawing is done
     let boundary = boundary_rect(rects);
-    let mut image = tiny_skia::Pixmap::new(tu32(boundary.size.x), tu32(boundary.size.y)).unwrap();
+    let mut image = tiny_skia::Pixmap::new(boundary.size.x, boundary.size.y).unwrap();
     // skia has y axis downwards, fix that
     let transform =
-        tiny_skia::Transform::from_scale(1., -1.).post_translate(0., tf32(boundary.size.y));
+        tiny_skia::Transform::from_scale(1., -1.).post_translate(0., boundary.size.y as f32);
     // draw rectangles
     for (rect, color) in Iterator::zip(rects.into_iter(), color_palette(rects.len())) {
         let bl_in_boundary_ref = rect.bottom_left - boundary.bottom_left;
         let rect = tiny_skia::Rect::from_xywh(
-            tf32(bl_in_boundary_ref.x),
-            tf32(bl_in_boundary_ref.y),
-            tf32(rect.size.x),
-            tf32(rect.size.y),
+            bl_in_boundary_ref.x as f32,
+            bl_in_boundary_ref.y as f32,
+            rect.size.x as f32,
+            rect.size.y as f32,
         )
         .unwrap();
         let mut paint = tiny_skia::Paint::default();
@@ -62,12 +59,12 @@ fn draw_layout(png_path: &std::path::Path, rects: &[Rect]) {
 fn main() {
     let rects = [
         Rect {
-            bottom_left: Vec2di::default(),
-            size: Vec2di::new(640, 480),
+            bottom_left: Vec2d::default(),
+            size: Vec2d::new(640, 480),
         },
         Rect {
-            bottom_left: Vec2di::new(640, 0),
-            size: Vec2di::new(320, 240),
+            bottom_left: Vec2d::new(640, 0),
+            size: Vec2d::new(320, 240),
         },
     ];
     draw_layout(std::path::Path::new("static.png"), &rects);
