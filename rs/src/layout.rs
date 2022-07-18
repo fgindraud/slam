@@ -141,8 +141,6 @@ bitflags::bitflags! {
         const OVERLAPS = 0b00000001;
         /// Output rects are not all connected to each other
         const GAPS = 0b00000010;
-        /// Using clone mode
-        const CLONES = 0b00000100;
         /// [`Edid`] present more than once
         const DUPLICATE_EDID = 0b00001000;
     }

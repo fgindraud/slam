@@ -298,7 +298,7 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::LayoutInfo {
         .primary
         .and_then(|id| output_states.outputs.get(&id))
         .map(OutputState::id);
-    let mut info = layout::LayoutInfo::from_iter(
+    layout::LayoutInfo::from_iter(
         output_states
             .outputs
             .values()
@@ -308,16 +308,7 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::LayoutInfo {
                 state: convert_output_state(state),
             }),
         primary_id,
-    );
-    // Post check for clones
-    if output_states
-        .outputs
-        .values()
-        .any(|output| !output.info.clones().is_empty())
-    {
-        info.unsupported_causes |= layout::UnsupportedCauses::CLONES;
-    }
-    info
+    )
 }
 
 ///////////////////////////////////////////////////////////////////////////////
