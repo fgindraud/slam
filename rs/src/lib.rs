@@ -9,13 +9,15 @@ pub mod layout;
 /// Relation representation
 pub mod relation;
 
+/// Backend interface.
+///
+/// [`Result::Err`] in methods should represent a *hard unrecoverable* error like X server connection failure.
+/// All other errors should be logged and recovered from if possible.
 pub trait Backend {
     /// Access the current layout and support status.
     fn current_layout(&self) -> layout::LayoutInfo;
 
     /// Wait for a change in backend layout.
-    /// Error should represent a *hard unrecoverable* error like X server connection failure.
-    /// All other errors should be logged and recovered from if possible.
     fn wait_for_change(&mut self, reaction_delay: Option<Duration>) -> Result<(), anyhow::Error>;
 
     /// Apply layout to the system using the backend.
@@ -32,6 +34,7 @@ pub fn run_daemon(
     database: &mut database::Database,
 ) -> Result<(), anyhow::Error> {
     let layout::LayoutInfo { mut layout, .. } = backend.current_layout();
+    backend.apply_layout(&layout); // DEBUG
     loop {
         dbg!(&layout);
         backend.wait_for_change(reaction_delay)?;
@@ -49,7 +52,10 @@ pub fn run_daemon(
                 log::info!("layout changed: storing to database");
                 database.store_layout(new_layout.clone())?;
             } else {
-                log::warn!("layout changed: ignored because unsupported: {:?}", unsupported_causes);
+                log::warn!(
+                    "layout changed: ignored because unsupported: {:?}",
+                    unsupported_causes
+                );
             }
             layout = new_layout
         } else {

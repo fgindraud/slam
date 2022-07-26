@@ -1,6 +1,7 @@
 use crate::geometry::{Rotation, Transform, Vec2d};
 use crate::layout::{self, Edid};
 use crate::Backend;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::Duration;
 use xcb::Xid;
@@ -105,8 +106,21 @@ impl Backend for XcbBackend {
 
     fn apply_layout(&mut self, layout: &layout::Layout) -> Result<(), anyhow::Error> {
         let enabled_configs =
-            compute_enabled_output_configs(layout.output_entries(), &self.output_set_state);
-        dbg!(enabled_configs);
+            match compute_enabled_output_configs(layout.output_entries(), &self.output_set_state) {
+                Ok(configs) => configs,
+                Err(e) => {
+                    log::warn!("could not apply layout: {}", e);
+                    return Ok(());
+                }
+            };
+        let crtc_mapping = match allocate_crtcs(&self.output_set_state, enabled_configs) {
+            Ok(mapping) => mapping,
+            Err(e) => {
+                log::warn!("could not apply layout: {}", e);
+                return Ok(());
+            }
+        };
+        dbg!(crtc_mapping);
         Ok(())
     }
 }
@@ -244,7 +258,10 @@ impl OutputSetState {
                     .map(|m| (m.id, layout::Mode::from(m))),
             ),
             connected_output_mapping: HashMap::from_iter(
-                outputs.iter().map(|(id, state)| (state.id(), id.clone())),
+                outputs
+                    .iter()
+                    .filter(|(_id, state)| state.is_connected())
+                    .map(|(id, state)| (state.id(), id.clone())),
             ),
             ressources,
             crtcs,
@@ -363,11 +380,57 @@ fn compute_enabled_output_configs(
         .collect()
 }
 
-fn choose_crtc_allocation(
+fn allocate_crtcs(
     state: &OutputSetState,
-) -> HashMap<xcb::randr::Crtc, Option<xcb::randr::Output>> {
+    mut target_configuration: HashMap<xcb::randr::Output, EnabledOutputConfiguration>,
+) -> Result<
+    HashMap<xcb::randr::Crtc, Option<(xcb::randr::Output, EnabledOutputConfiguration)>>,
+    String,
+> {
+    let can_allocate_crtc = |output: &xcb::randr::Output,
+                             crtc: &xcb::randr::Crtc,
+                             config: &EnabledOutputConfiguration| {
+        let crtc_info = &state.crtcs[crtc];
+        let can_fit_output = crtc_info.possible().contains(output);
+        let can_fit_transform = crtc_info.rotations().contains(config.rotation);
+        can_fit_output && can_fit_transform
+    };
+
     let mut output_by_crtc = HashMap::from_iter(state.crtcs.keys().map(|k| (k.clone(), None)));
-    output_by_crtc
+
+    // For already enabled outputs, see if we can keep the same crtc.
+    // This avoids "resetting" the screen like xrandr does.
+    for (output, state) in state.outputs.iter() {
+        if let (Some(crtc), Entry::Occupied(config)) = (
+            filter_xid(state.info.crtc()),
+            target_configuration.entry(output.clone()),
+        ) {
+            let allocation = output_by_crtc.get_mut(&crtc).unwrap();
+            if allocation.is_none() && can_allocate_crtc(output, &crtc, config.get()) {
+                *allocation = Some((output.clone(), config.remove()))
+            }
+        }
+    }
+
+    // Find Crtc for all remaining requested outputs
+    for (output, config) in target_configuration.into_iter() {
+        let allocated_entry = output_by_crtc.iter_mut().find(|(crtc, allocation)| {
+            allocation.is_none() && can_allocate_crtc(&output, crtc, &config)
+        });
+        match allocated_entry {
+            Some((_crtc, allocation)) => {
+                *allocation = Some((output, config));
+            }
+            None => {
+                return Err(format!(
+                    "cannot allocate crtc for output {}",
+                    state.outputs[&output].name
+                ))
+            }
+        }
+    }
+
+    Ok(output_by_crtc)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
