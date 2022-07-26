@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 use xcb::Xid;
 
+const MM_PER_INCH: f64 = 25.4;
+
 /// Backend for X server, using xcb bindings with randr extension.
 /// Useful documentation : `/usr/share/doc/xorgproto/randrproto.txt`.
 ///
@@ -22,6 +24,10 @@ pub struct XcbBackend {
     root_window: xcb::x::Window,
     edid_atom: xcb::x::Atom,
     output_set_state: OutputSetState,
+    /// SetScreenSize requires a physical size for legacy reasons.
+    /// This physical size is meaningless for multiple outputs in a screen (since randr 1.2).
+    /// A fake dpi value is used to fill these required useless values from screen pixel size.
+    fake_screen_dpi: f64,
 }
 
 impl XcbBackend {
@@ -60,12 +66,37 @@ impl XcbBackend {
             }
         };
 
+        let fake_screen_dpi = {
+            // Deduce fake dpi from legacy screen api
+            let cookie = connection.send_request(&xcb::randr::GetScreenInfo {
+                window: root_window,
+            });
+            let reply = connection.wait_for_reply(cookie)?;
+            // Use reported physical / virtual sizes for selected screen size
+            let inferred_dpi = reply
+                .sizes()
+                .get(usize::from(reply.size_id()))
+                .and_then(|size| {
+                    if size.mwidth > 0 && size.mheight > 0 {
+                        let dpmm_x = f64::from(size.width) / f64::from(size.mwidth);
+                        let dpmm_y = f64::from(size.height) / f64::from(size.mheight);
+                        let dpi = (0.5 * MM_PER_INCH) * (dpmm_x + dpmm_y);
+                        Some(dpi)
+                    } else {
+                        None
+                    }
+                });
+            inferred_dpi.unwrap_or(96.)
+        };
+        log::debug!("using fake DPI of {}", fake_screen_dpi);
+
         let output_set_state = OutputSetState::query(&connection, root_window, edid_atom)?;
         Ok(XcbBackend {
             connection,
             root_window,
             edid_atom,
             output_set_state,
+            fake_screen_dpi,
         })
     }
 }
@@ -431,6 +462,19 @@ fn allocate_crtcs(
     }
 
     Ok(output_by_crtc)
+}
+
+fn apply_crtc_configuration(
+    backend: &XcbBackend,
+    configuration: &HashMap<
+        xcb::randr::Crtc,
+        Option<(xcb::randr::Output, EnabledOutputConfiguration)>,
+    >,
+) -> Result<(), anyhow::Error> {
+
+    //xcb::x::GrabServer;
+    //xcb::x::UngrabServer;
+    Ok(())
 }
 
 ///////////////////////////////////////////////////////////////////////////////
