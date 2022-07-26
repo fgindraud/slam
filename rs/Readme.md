@@ -5,7 +5,9 @@ Daemon used to automatically remember multi screen layouts and restore them late
 Screen layouts are stored for each set of connected screens, identified by their [EDID](https://en.wikipedia.org/wiki/Extended_Display_Identification_Data).
 
 WIP, converting from python/C++ to rust with changes:
-- early stages of conversion: read layout from backend, etc...
+- todo "apply layout" for basic functionnality
+- todo autolayouting
+- todo improved edid parsing for nice names and recognizing multiple outputs of a monitor ? edid-rs crate.
 
 Compiling and backends
 ----------------------
@@ -33,7 +35,7 @@ When the backend layout changes :
 * If the set of physical outputs is different from before (add / remove screen) :
     * If a database entry exists for this set of outputs, use the stored layout.
     * If no database entry, this is a new situation: create a layout enabling the new screen(s) with a default position.
-* If same set of outputs, this is a change to software layout: store it unless it is _unsupported_ (overlapping / clone outputs, maybe check for CRTC transform, etc)
+* If same set of outputs, this is a change to software layout: store it unless it is _unsupported_ (overlapping outputs, maybe check for CRTC transform, etc)
 
 Thus with this set of semantics the stored layouts can be set by using any other tool to change the current layout : `xrandr`, `arandr`, GUIs.
 The change from this external tool will be recognized as a _software_ change and be stored, eliminating the need to configure it from _SLAM_ itself.
