@@ -171,12 +171,6 @@ impl<T> Vec2d<T> {
             y: f(self.y),
         }
     }
-    pub fn try_map<U, E, F: Fn(T) -> Result<U, E>>(self, f: F) -> Result<Vec2d<U>, E> {
-        Ok(Vec2d {
-            x: f(self.x)?,
-            y: f(self.y)?,
-        })
-    }
 }
 
 impl<T: Add> Add for Vec2d<T> {

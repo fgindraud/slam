@@ -34,7 +34,6 @@ pub fn run_daemon(
     database: &mut database::Database,
 ) -> Result<(), anyhow::Error> {
     let layout::LayoutInfo { mut layout, .. } = backend.current_layout();
-    backend.apply_layout(&layout); // DEBUG
     loop {
         dbg!(&layout);
         backend.wait_for_change(reaction_delay)?;
@@ -70,7 +69,7 @@ pub fn run_daemon(
                 // autolayout
                 log::info!("use auto-generated layout (not functionnal)");
                 let database::LayoutById(new_layout) = by_id;
-                todo!()
+                // TODO do nothing
             }
         }
     }

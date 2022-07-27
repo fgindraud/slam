@@ -146,6 +146,10 @@ impl Layout {
                 OutputState::Disabled => max,
             })
     }
+
+    pub fn primary(&self) -> Option<&OutputId> {
+        self.primary.as_ref()
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

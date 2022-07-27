@@ -1,6 +1,7 @@
 use crate::geometry::{Rotation, Transform, Vec2d};
 use crate::layout::{self, Edid};
 use crate::Backend;
+use anyhow::Context;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -107,24 +108,15 @@ impl Backend for XcbBackend {
     }
 
     fn apply_layout(&mut self, layout: &layout::Layout) -> Result<(), anyhow::Error> {
-        // Precompute xcb calls arguments. On error just warn.
-        let compute_xcb_config = || -> Result<_, String> {
-            let new_screen_size = target_layout_screen_size(layout, &self.output_set_state)?;
-            let enabled_configs = compute_enabled_output_configs(layout, &self.output_set_state)?;
-            let crtc_mapping = allocate_crtcs(&self.output_set_state, enabled_configs)?;
-            Ok((new_screen_size, crtc_mapping))
-        };
-        let (new_screen_size, crtc_mapping) = match compute_xcb_config() {
-            Ok(v) => v,
-            Err(msg) => {
+        // Does not update output_set_state
+        match apply_layout(self, layout) {
+            Ok(()) => Ok(()),
+            Err(ApplyLayoutError::Fatal(e)) => Err(e),
+            Err(ApplyLayoutError::Recoverable(msg)) => {
                 log::warn!("could not apply layout: {}", msg);
-                return Ok(());
+                Ok(())
             }
-        };
-
-        dbg!(new_screen_size);
-        dbg!(crtc_mapping);
-        Ok(())
+        }
     }
 }
 
@@ -142,6 +134,7 @@ fn check_randr_event(event: xcb::Event) -> bool {
 
 #[derive(Debug)]
 struct OutputSetState {
+    screen_size: Vec2d<u16>,
     ressources: xcb::randr::GetScreenResourcesReply,
     mode_by_id: HashMap<u32, layout::Mode>,
     crtcs: HashMap<xcb::randr::Crtc, xcb::randr::GetCrtcInfoReply>,
@@ -183,6 +176,9 @@ impl OutputSetState {
         let primary_request = conn.send_request(&xcb::randr::GetOutputPrimary {
             window: root_window,
         });
+        let screen_size_request = conn.send_request(&xcb::x::GetGeometry {
+            drawable: xcb::x::Drawable::Window(root_window),
+        });
         let ressources = conn.wait_for_reply(ressources_req)?;
         let config_timestamp = ressources.config_timestamp();
 
@@ -196,7 +192,7 @@ impl OutputSetState {
         };
         let process_crtc_reply = |(crtc, request)| -> Result<_, anyhow::Error> {
             let reply: xcb::randr::GetCrtcInfoReply = conn.wait_for_reply(request)?;
-            check_status(reply.status())?;
+            check_status(reply.status()).with_context(|| "GetCrtcInfo")?;
             Ok((crtc, reply))
         };
 
@@ -218,7 +214,7 @@ impl OutputSetState {
         };
         let process_output_replies = |(output, info_req, edid_req)| -> Result<_, anyhow::Error> {
             let info: xcb::randr::GetOutputInfoReply = conn.wait_for_reply(info_req)?;
-            check_status(info.status())?;
+            check_status(info.status()).with_context(|| "GetOutputInfo")?;
             let name = String::from_utf8_lossy(info.name()).to_string();
             let edid_reply: xcb::randr::GetOutputPropertyReply = conn.wait_for_reply(edid_req)?;
             let edid = match edid_reply.r#type() {
@@ -249,9 +245,11 @@ impl OutputSetState {
         let outputs: HashMap<_, _> =
             Result::from_iter(output_requests.into_iter().map(process_output_replies))?;
 
-        // End with primary request. This is a Xid so filter for nones
+        // End with primary & screen_size request.
         let primary_reply = conn.wait_for_reply(primary_request)?;
         let primary = filter_xid(primary_reply.output());
+        let screen_size_reply = conn.wait_for_reply(screen_size_request)?;
+        let screen_size = Vec2d::new(screen_size_reply.width(), screen_size_reply.height());
 
         Ok(OutputSetState {
             mode_by_id: HashMap::from_iter(
@@ -266,6 +264,7 @@ impl OutputSetState {
                     .filter(|(_id, state)| state.is_connected())
                     .map(|(id, state)| (state.id(), id.clone())),
             ),
+            screen_size,
             ressources,
             crtcs,
             outputs,
@@ -333,16 +332,64 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::LayoutInfo {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+enum ApplyLayoutError {
+    Recoverable(String),
+    Fatal(anyhow::Error),
+}
+impl From<anyhow::Error> for ApplyLayoutError {
+    fn from(e: anyhow::Error) -> Self {
+        ApplyLayoutError::Fatal(e)
+    }
+}
+
+fn apply_layout(backend: &mut XcbBackend, layout: &layout::Layout) -> Result<(), ApplyLayoutError> {
+    let new_screen_size = target_layout_screen_size(layout, &backend.output_set_state);
+    let enabled_outputs = compute_enabled_output_configs(layout, &backend.output_set_state)?;
+    let crtc_mapping = allocate_crtcs(&backend.output_set_state, enabled_outputs)?;
+
+    // Grab server while modifying state, to make the crtc changes atomic for other listeners.
+    // Notifications are not sent to other listeners while grabbed.
+    backend.connection.send_request(&xcb::x::GrabServer {});
+    match try_apply_crtc_configuration(backend, &crtc_mapping, &new_screen_size) {
+        Ok(()) => (),
+        Err(ApplyLayoutError::Recoverable(msg)) => {
+            log::warn!("could not apply layout ; reverting: {}", msg);
+            todo!("revert")
+        }
+        Err(ApplyLayoutError::Fatal(_e)) => {
+            todo!("try revert ? abort ?")
+        }
+    }
+
+    if let Some(primary) = layout.primary() {
+        backend
+            .connection
+            .send_request(&xcb::randr::SetOutputPrimary {
+                window: backend.root_window,
+                output: backend.output_set_state.connected_output_mapping[primary],
+            });
+    }
+
+    backend
+        .connection
+        .send_and_check_request(&xcb::x::UngrabServer {})
+        .with_context(|| "UngrabServer")?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct XcbScreenSize {
+    pixel: Vec2d<u16>,
+    physical: Vec2d<u32>,
+}
+
 /// SetScreenSize requires a physical size for legacy reasons.
 /// This physical size is meaningless for multiple outputs in a screen (since randr 1.2).
 /// A fake dpi value is used to fill these required useless values from screen pixel size.
-fn target_layout_screen_size(
-    layout: &layout::Layout,
-    state: &OutputSetState,
-) -> Result<xcb::randr::ScreenSize, String> {
-    let pixel_size = layout
+fn target_layout_screen_size(layout: &layout::Layout, state: &OutputSetState) -> XcbScreenSize {
+    let pixel = layout
         .bounding_rect_size()
-        .try_map(|i| u16::try_from(i).map_err(|_| "size integer overflows u16 xcb limit"))?;
+        .map(|i| u16::try_from(i).expect("size integer overflows u16 xcb limit"));
 
     let fake_dpi = {
         // Compute fake dpi as an average of outputs dpi, weighted by pixel area
@@ -367,36 +414,31 @@ fn target_layout_screen_size(
         }
     };
     log::debug!("using fake DPI of {}", fake_dpi);
-    let fake_mm_size = pixel_size.clone().try_map(|i| {
-        let mm = f64::from(i) * MM_PER_INCH / fake_dpi;
-        u16::try_from(mm as u64).map_err(|_| "mm size overflows xcb u16 limit, maybe bad fake dpi")
-    })?;
+    let physical = pixel
+        .clone()
+        .map(|i| (f64::from(i) * MM_PER_INCH / fake_dpi) as u32);
 
-    Ok(xcb::randr::ScreenSize {
-        width: pixel_size.x,
-        height: pixel_size.y,
-        mwidth: fake_mm_size.x,
-        mheight: fake_mm_size.y,
-    })
+    XcbScreenSize { pixel, physical }
 }
 
 #[derive(Debug, Clone)]
 struct EnabledOutputConfiguration {
-    bottom_left: Vec2d<i32>,
+    output: xcb::randr::Output,
+    bottom_left: Vec2d<i16>,
     mode: xcb::randr::Mode,
     rotation: xcb::randr::Rotation,
 }
 
+/// Extract the list of enabled outputs, convert layout config to xcb structs
 fn compute_enabled_output_configs(
     layout: &layout::Layout,
     state: &OutputSetState,
-) -> Result<HashMap<xcb::randr::Output, EnabledOutputConfiguration>, String> {
+) -> Result<HashMap<xcb::randr::Output, EnabledOutputConfiguration>, ApplyLayoutError> {
     let scan_mode_list = |list: &[xcb::randr::Mode], requested_mode: &layout::Mode| {
         list.into_iter()
             .find(|id| requested_mode == &state.mode_by_id[&id.resource_id()])
             .cloned()
     };
-
     layout
         .output_entries()
         .into_iter()
@@ -409,23 +451,24 @@ fn compute_enabled_output_configs(
             } => {
                 let output_id = &state.connected_output_mapping[&entry.id];
                 let output = &state.outputs[output_id];
-                let requested_mode_id = match scan_mode_list(output.info.modes(), requested_mode) {
-                    Some(id) => id,
-                    None => {
-                        return Some(Err(format!(
-                            "no mode matching {} found in output {}",
-                            requested_mode, output.name
-                        )))
-                    }
+                let entry = match scan_mode_list(output.info.modes(), requested_mode) {
+                    Some(mode_id) => Ok((
+                        output_id.clone(),
+                        EnabledOutputConfiguration {
+                            output: output_id.clone(),
+                            bottom_left: bottom_left
+                                .clone()
+                                .map(|i| i.try_into().expect("bottom_left coordinate overflow")),
+                            mode: mode_id,
+                            rotation: transform.into(),
+                        },
+                    )),
+                    None => Err(ApplyLayoutError::Recoverable(format!(
+                        "no mode matching {} found in output {}",
+                        requested_mode, output.name
+                    ))),
                 };
-                Some(Ok((
-                    output_id.clone(),
-                    EnabledOutputConfiguration {
-                        bottom_left: bottom_left.clone(),
-                        mode: requested_mode_id,
-                        rotation: transform.into(),
-                    },
-                )))
+                Some(entry)
             }
         })
         .collect()
@@ -433,20 +476,14 @@ fn compute_enabled_output_configs(
 
 fn allocate_crtcs(
     state: &OutputSetState,
-    mut target_configuration: HashMap<xcb::randr::Output, EnabledOutputConfiguration>,
-) -> Result<
-    HashMap<xcb::randr::Crtc, Option<(xcb::randr::Output, EnabledOutputConfiguration)>>,
-    String,
-> {
-    let can_allocate_crtc = |output: &xcb::randr::Output,
-                             crtc: &xcb::randr::Crtc,
-                             config: &EnabledOutputConfiguration| {
+    mut enabled_outputs: HashMap<xcb::randr::Output, EnabledOutputConfiguration>,
+) -> Result<HashMap<xcb::randr::Crtc, Option<EnabledOutputConfiguration>>, ApplyLayoutError> {
+    let can_allocate_crtc = |crtc: &xcb::randr::Crtc, config: &EnabledOutputConfiguration| {
         let crtc_info = &state.crtcs[crtc];
-        let can_fit_output = crtc_info.possible().contains(output);
+        let can_fit_output = crtc_info.possible().contains(&config.output);
         let can_fit_transform = crtc_info.rotations().contains(config.rotation);
         can_fit_output && can_fit_transform
     };
-
     let mut output_by_crtc = HashMap::from_iter(state.crtcs.keys().map(|k| (k.clone(), None)));
 
     // For already enabled outputs, see if we can keep the same crtc.
@@ -454,45 +491,140 @@ fn allocate_crtcs(
     for (output, state) in state.outputs.iter() {
         if let (Some(crtc), Entry::Occupied(config)) = (
             filter_xid(state.info.crtc()),
-            target_configuration.entry(output.clone()),
+            enabled_outputs.entry(output.clone()),
         ) {
             let allocation = output_by_crtc.get_mut(&crtc).unwrap();
-            if allocation.is_none() && can_allocate_crtc(output, &crtc, config.get()) {
-                *allocation = Some((output.clone(), config.remove()))
+            if allocation.is_none() && can_allocate_crtc(&crtc, config.get()) {
+                *allocation = Some(config.remove())
             }
         }
     }
-
     // Find Crtc for all remaining requested outputs
-    for (output, config) in target_configuration.into_iter() {
-        let allocated_entry = output_by_crtc.iter_mut().find(|(crtc, allocation)| {
-            allocation.is_none() && can_allocate_crtc(&output, crtc, &config)
-        });
+    for (output, config) in enabled_outputs.into_iter() {
+        let allocated_entry = output_by_crtc
+            .iter_mut()
+            .find(|(crtc, allocation)| allocation.is_none() && can_allocate_crtc(crtc, &config));
         match allocated_entry {
             Some((_crtc, allocation)) => {
-                *allocation = Some((output, config));
+                *allocation = Some(config);
             }
             None => {
-                return Err(format!(
+                return Err(ApplyLayoutError::Recoverable(format!(
                     "cannot allocate crtc for output {}",
                     state.outputs[&output].name
-                ))
+                )))
             }
         }
     }
-
     Ok(output_by_crtc)
 }
 
-fn apply_crtc_configuration(
+// outer Error is fatal (xcb connection level), inner is set_crtc
+fn try_apply_crtc_configuration(
     backend: &XcbBackend,
-    configuration: &HashMap<
-        xcb::randr::Crtc,
-        Option<(xcb::randr::Output, EnabledOutputConfiguration)>,
-    >,
-) -> Result<(), anyhow::Error> {
-    //xcb::x::GrabServer;
-    //xcb::x::UngrabServer;
+    crtc_mapping: &HashMap<xcb::randr::Crtc, Option<EnabledOutputConfiguration>>,
+    new_screen_size: &XcbScreenSize,
+) -> Result<(), ApplyLayoutError> {
+    let config_timestamp = backend.output_set_state.ressources.config_timestamp();
+    let mut timestamp = backend.output_set_state.ressources.timestamp();
+
+    let resize_screen = |size: &Vec2d<u16>| {
+        backend
+            .connection
+            .send_and_check_request(&xcb::randr::SetScreenSize {
+                window: backend.root_window,
+                width: size.x,
+                height: size.y,
+                mm_width: new_screen_size.physical.x,
+                mm_height: new_screen_size.physical.y,
+            })
+            .with_context(|| format!("SetScreenSize({:?})", size))
+    };
+    let mut set_crtc = |crtc: &xcb::randr::Crtc,
+                        allocation: &Option<EnabledOutputConfiguration>|
+     -> Result<(), ApplyLayoutError> {
+        let request = match allocation {
+            Some(config) => xcb::randr::SetCrtcConfig {
+                crtc: crtc.clone(),
+                timestamp,
+                config_timestamp,
+                x: config.bottom_left.x,
+                y: config.bottom_left.y,
+                mode: config.mode,
+                rotation: config.rotation,
+                outputs: std::slice::from_ref(&config.output),
+            },
+            None => xcb::randr::SetCrtcConfig {
+                crtc: crtc.clone(),
+                timestamp,
+                config_timestamp,
+                x: 0,
+                y: 0,
+                mode: Xid::none(),
+                rotation: xcb::randr::Rotation::ROTATE_0,
+                outputs: &[],
+            },
+        };
+        let cookie = backend.connection.send_request(&request);
+        let reply = backend
+            .connection
+            .wait_for_reply(cookie)
+            .with_context(|| format!("SetCrtcConfig({:?})", request))?;
+
+        use xcb::randr::SetConfig;
+        let fail_msg = match reply.status() {
+            SetConfig::Success => {
+                // Update to newest timestamp representing our change.
+                // This is required by following set_crtc, hence the sequential wait_for_reply().
+                timestamp = reply.timestamp();
+                return Ok(());
+            }
+            SetConfig::InvalidTime => "invalid timestamp",
+            SetConfig::InvalidConfigTime => "invalid config timestamp",
+            SetConfig::Failed => "generic failure",
+        };
+        Err(ApplyLayoutError::Recoverable(format!(
+            "SetCrtcConfig({:?}): {}",
+            request, fail_msg
+        )))
+    };
+
+    // The overall randr state need to be valid between each SetCrtc call.
+    // Resize screen to the maximum needed for all operations.
+    let temporary_screen_size = Vec2d::cwise_max(
+        backend.output_set_state.screen_size.clone(),
+        new_screen_size.pixel.clone(),
+    );
+    resize_screen(&temporary_screen_size)?;
+
+    // Crtc changes are sequential, each intermediate state must be valid.
+    // Having an outputs mapped to 2 crtcs would be an error.
+    // So do crtcs changes in a very specific order to prevent this.
+
+    // Disable newly unused crtcs
+    for (crtc, allocation) in crtc_mapping.iter() {
+        if allocation.is_none() && backend.output_set_state.crtcs[&crtc].outputs().len() > 0 {
+            set_crtc(crtc, &None)?;
+        }
+    }
+    // Reassign cloned crtcs first to detach them from many outputs
+    for (crtc, allocation) in crtc_mapping.iter() {
+        if allocation.is_some() && backend.output_set_state.crtcs[&crtc].outputs().len() > 1 {
+            set_crtc(crtc, allocation)?;
+        }
+    }
+    // Set remaning crtcs
+    for (crtc, allocation) in crtc_mapping.iter() {
+        if allocation.is_some() && backend.output_set_state.crtcs[&crtc].outputs().len() <= 1 {
+            set_crtc(crtc, allocation)?;
+        }
+    }
+    // Left untouched : crtc disabled (== with no outputs) before & after.
+
+    // Resize to final dimensions
+    if temporary_screen_size != new_screen_size.pixel {
+        resize_screen(&new_screen_size.pixel)?;
+    }
     Ok(())
 }
 
