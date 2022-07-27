@@ -171,6 +171,12 @@ impl<T> Vec2d<T> {
             y: f(self.y),
         }
     }
+    pub fn try_map<U, E, F: Fn(T) -> Result<U, E>>(self, f: F) -> Result<Vec2d<U>, E> {
+        Ok(Vec2d {
+            x: f(self.x)?,
+            y: f(self.y)?,
+        })
+    }
 }
 
 impl<T: Add> Add for Vec2d<T> {
@@ -209,7 +215,7 @@ impl<T: Ord> Vec2d<T> {
         }
     }
     /// Component-wise max.
-    fn cwise_max(self, rhs: Vec2d<T>) -> Vec2d<T> {
+    pub fn cwise_max(self, rhs: Vec2d<T>) -> Vec2d<T> {
         Vec2d {
             x: std::cmp::max(self.x, rhs.x),
             y: std::cmp::max(self.y, rhs.y),

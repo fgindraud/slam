@@ -34,6 +34,7 @@ pub fn run_daemon(
     database: &mut database::Database,
 ) -> Result<(), anyhow::Error> {
     let layout::LayoutInfo { mut layout, .. } = backend.current_layout();
+    backend.apply_layout(&layout); // DEBUG
     loop {
         dbg!(&layout);
         backend.wait_for_change(reaction_delay)?;

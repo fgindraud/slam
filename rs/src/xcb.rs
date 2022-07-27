@@ -24,10 +24,6 @@ pub struct XcbBackend {
     root_window: xcb::x::Window,
     edid_atom: xcb::x::Atom,
     output_set_state: OutputSetState,
-    /// SetScreenSize requires a physical size for legacy reasons.
-    /// This physical size is meaningless for multiple outputs in a screen (since randr 1.2).
-    /// A fake dpi value is used to fill these required useless values from screen pixel size.
-    fake_screen_dpi: f64,
 }
 
 impl XcbBackend {
@@ -66,37 +62,12 @@ impl XcbBackend {
             }
         };
 
-        let fake_screen_dpi = {
-            // Deduce fake dpi from legacy screen api
-            let cookie = connection.send_request(&xcb::randr::GetScreenInfo {
-                window: root_window,
-            });
-            let reply = connection.wait_for_reply(cookie)?;
-            // Use reported physical / virtual sizes for selected screen size
-            let inferred_dpi = reply
-                .sizes()
-                .get(usize::from(reply.size_id()))
-                .and_then(|size| {
-                    if size.mwidth > 0 && size.mheight > 0 {
-                        let dpmm_x = f64::from(size.width) / f64::from(size.mwidth);
-                        let dpmm_y = f64::from(size.height) / f64::from(size.mheight);
-                        let dpi = (0.5 * MM_PER_INCH) * (dpmm_x + dpmm_y);
-                        Some(dpi)
-                    } else {
-                        None
-                    }
-                });
-            inferred_dpi.unwrap_or(96.)
-        };
-        log::debug!("using fake DPI of {}", fake_screen_dpi);
-
         let output_set_state = OutputSetState::query(&connection, root_window, edid_atom)?;
         Ok(XcbBackend {
             connection,
             root_window,
             edid_atom,
             output_set_state,
-            fake_screen_dpi,
         })
     }
 }
@@ -136,21 +107,22 @@ impl Backend for XcbBackend {
     }
 
     fn apply_layout(&mut self, layout: &layout::Layout) -> Result<(), anyhow::Error> {
-        let enabled_configs =
-            match compute_enabled_output_configs(layout.output_entries(), &self.output_set_state) {
-                Ok(configs) => configs,
-                Err(e) => {
-                    log::warn!("could not apply layout: {}", e);
-                    return Ok(());
-                }
-            };
-        let crtc_mapping = match allocate_crtcs(&self.output_set_state, enabled_configs) {
-            Ok(mapping) => mapping,
-            Err(e) => {
-                log::warn!("could not apply layout: {}", e);
+        // Precompute xcb calls arguments. On error just warn.
+        let compute_xcb_config = || -> Result<_, String> {
+            let new_screen_size = target_layout_screen_size(layout, &self.output_set_state)?;
+            let enabled_configs = compute_enabled_output_configs(layout, &self.output_set_state)?;
+            let crtc_mapping = allocate_crtcs(&self.output_set_state, enabled_configs)?;
+            Ok((new_screen_size, crtc_mapping))
+        };
+        let (new_screen_size, crtc_mapping) = match compute_xcb_config() {
+            Ok(v) => v,
+            Err(msg) => {
+                log::warn!("could not apply layout: {}", msg);
                 return Ok(());
             }
         };
+
+        dbg!(new_screen_size);
         dbg!(crtc_mapping);
         Ok(())
     }
@@ -361,6 +333,53 @@ fn convert_to_layout(output_states: &OutputSetState) -> layout::LayoutInfo {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+/// SetScreenSize requires a physical size for legacy reasons.
+/// This physical size is meaningless for multiple outputs in a screen (since randr 1.2).
+/// A fake dpi value is used to fill these required useless values from screen pixel size.
+fn target_layout_screen_size(
+    layout: &layout::Layout,
+    state: &OutputSetState,
+) -> Result<xcb::randr::ScreenSize, String> {
+    let pixel_size = layout
+        .bounding_rect_size()
+        .try_map(|i| u16::try_from(i).map_err(|_| "size integer overflows u16 xcb limit"))?;
+
+    let fake_dpi = {
+        // Compute fake dpi as an average of outputs dpi, weighted by pixel area
+        let mut dpi_weighted_sum: f64 = 0.;
+        let mut dpi_weight_sum: f64 = 0.;
+        for entry in layout.output_entries() {
+            if let layout::OutputState::Enabled { mode, .. } = &entry.state {
+                let output = &state.outputs[&state.connected_output_mapping[&entry.id]];
+                if output.info.mm_width() > 0 && output.info.mm_height() > 0 {
+                    let dpmm_x = f64::from(mode.size.x) / f64::from(output.info.mm_width());
+                    let dpmm_y = f64::from(mode.size.y) / f64::from(output.info.mm_height());
+                    let weight = f64::from(output.info.mm_width() * output.info.mm_height());
+                    dpi_weighted_sum += weight * (MM_PER_INCH * 0.5) * (dpmm_x + dpmm_y);
+                    dpi_weight_sum += weight;
+                }
+            }
+        }
+        if dpi_weight_sum > 0. {
+            dpi_weighted_sum / dpi_weight_sum
+        } else {
+            96.
+        }
+    };
+    log::debug!("using fake DPI of {}", fake_dpi);
+    let fake_mm_size = pixel_size.clone().try_map(|i| {
+        let mm = f64::from(i) * MM_PER_INCH / fake_dpi;
+        u16::try_from(mm as u64).map_err(|_| "mm size overflows xcb u16 limit, maybe bad fake dpi")
+    })?;
+
+    Ok(xcb::randr::ScreenSize {
+        width: pixel_size.x,
+        height: pixel_size.y,
+        mwidth: fake_mm_size.x,
+        mheight: fake_mm_size.y,
+    })
+}
+
 #[derive(Debug, Clone)]
 struct EnabledOutputConfiguration {
     bottom_left: Vec2d<i32>,
@@ -369,7 +388,7 @@ struct EnabledOutputConfiguration {
 }
 
 fn compute_enabled_output_configs(
-    entries: &[layout::OutputEntry],
+    layout: &layout::Layout,
     state: &OutputSetState,
 ) -> Result<HashMap<xcb::randr::Output, EnabledOutputConfiguration>, String> {
     let scan_mode_list = |list: &[xcb::randr::Mode], requested_mode: &layout::Mode| {
@@ -378,7 +397,8 @@ fn compute_enabled_output_configs(
             .cloned()
     };
 
-    entries
+    layout
+        .output_entries()
         .into_iter()
         .filter_map(|entry| match &entry.state {
             layout::OutputState::Disabled => None,
@@ -471,7 +491,6 @@ fn apply_crtc_configuration(
         Option<(xcb::randr::Output, EnabledOutputConfiguration)>,
     >,
 ) -> Result<(), anyhow::Error> {
-
     //xcb::x::GrabServer;
     //xcb::x::UngrabServer;
     Ok(())

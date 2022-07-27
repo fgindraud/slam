@@ -131,6 +131,21 @@ impl Layout {
     pub fn output_entries<'l>(&'l self) -> &'l [OutputEntry] {
         &self.outputs
     }
+
+    /// Size of minimal rectangle containing all outputs: `Rect{(0,0), size}`
+    pub fn bounding_rect_size(&self) -> Vec2d<u32> {
+        self.outputs
+            .iter()
+            .fold(Vec2d::default(), |max, output| match &output.state {
+                OutputState::Enabled {
+                    bottom_left, mode, ..
+                } => Vec2d::cwise_max(
+                    max,
+                    bottom_left.map(|i| u32::try_from(i).unwrap()) + mode.size,
+                ),
+                OutputState::Disabled => max,
+            })
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
