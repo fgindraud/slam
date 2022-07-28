@@ -44,7 +44,7 @@ pub fn run_daemon(
         // Select behavior
         if new_layout == layout {
             // if layout is the same as last seen or requested : ignore
-            log::debug!("layout unchanged, ignored")
+            log::info!("layout unchanged, ignored")
         } else if Iterator::eq(new_layout.connected_outputs(), layout.connected_outputs()) {
             // same outputs but changes : store to db if supported
             if unsupported_causes.is_empty() {
@@ -69,7 +69,7 @@ pub fn run_daemon(
                 // autolayout
                 log::info!("use auto-generated layout (not functionnal)");
                 let database::LayoutById(new_layout) = by_id;
-                // TODO do nothing
+                // TODO do nothing for now
             }
         }
     }

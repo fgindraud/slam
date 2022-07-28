@@ -80,23 +80,27 @@ impl Backend for XcbBackend {
 
     fn wait_for_change(&mut self, reaction_delay: Option<Duration>) -> Result<(), anyhow::Error> {
         // Wait for any randr event, then reload entire randr state.
-        // Easier than patching state with notify event data.
+        // Initial version used poll_for_queued_event() after one poll() for efficiency.
+        // Changes were missed due to that so this was reverted to active poll.
+        //
+        // Reloading everything is easier than patching state with notify event data.
+        // Interestingly, libX11 has XRRUpdateConfiguration(event) that seems to do that.
+        //
+        // Also of interest, Mutter randr code uses event timestamp / config timestamp to determine if this was a hotplug event.
+        // See https://gitlab.gnome.org/GNOME/mutter/-/blob/main/src/backends/x11/meta-monitor-manager-xrandr.c
         loop {
             // Wait for event, flush all events, and determine if it was randr related
             let mut had_randr_event = false;
             let event = self.connection.wait_for_event()?;
             had_randr_event |= check_randr_event(event);
-            while let Some(event) = self.connection.poll_for_queued_event()? {
+            while let Some(event) = self.connection.poll_for_event()? {
                 had_randr_event |= check_randr_event(event)
             }
             if had_randr_event {
                 // If delay is requested, also flush all randr events during the delay
                 if let Some(delay) = reaction_delay {
                     std::thread::sleep(delay);
-                    if let Some(event) = self.connection.poll_for_event()? {
-                        check_randr_event(event);
-                    }
-                    while let Some(event) = self.connection.poll_for_queued_event()? {
+                    while let Some(event) = self.connection.poll_for_event()? {
                         check_randr_event(event);
                     }
                 }
