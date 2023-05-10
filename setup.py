@@ -40,7 +40,7 @@ setup (
         # Metadata
         description = "Screen layout manager",
         long_description = io.open ("Readme.md", encoding = "utf-8").read (),
-        url = "https://github.com/lereldarion/slam",
+        url = "https://github.com/fgindraud/slam",
         license = "MIT",
 
         # Classification

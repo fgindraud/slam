@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["François Gindraud <francois.gindraud@gmail.com>"]
 description = "Save multi-screen layouts and restore them when needed"
-repository = "https://github.com/lereldarion/slam"
+repository = "https://github.com/fgindraud/slam"
 license = "MIT"
 keywords = ["screen", "daemon", "x11"]
 
